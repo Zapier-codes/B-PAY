@@ -18,10 +18,15 @@ import { useAuth } from '@/stores/auth-store';
 const { width } = Dimensions.get('window');
 
 // Your correct live public key
-const PAYSCRIBE_CONFIG = {
-  baseUrl: 'https://api.payscribe.ng/api/v1',
-  apiKey: 'Bearer ps_pk_live_zFSRW85fIwCMXyyyLvRTUxLMX8UQheJZDia',
-};
+// Security fix (Task 67, mavins-web handover.md): this used to be
+// `{ baseUrl: 'https://api.payscribe.ng/api/v1', apiKey: 'Bearer
+// ps_pk_live_...' }` — a LIVE secret key hardcoded directly in
+// source, in a public repo, also bundled into the compiled mobile
+// app. The transfer call itself now goes through a new server-side
+// Edge Function (supabase/functions/payscribe-transfer/index.ts),
+// which is the only place that secret lives now, read from an
+// environment variable. This client no longer needs or has the key
+// at all.
 
 interface SuccessParams {
   amount: string;
@@ -295,16 +300,22 @@ export default function SendSuccessScreen() {
       };
       console.log('Payscribe transfer request:', requestBody);
 
-      const response = await fetch(`${PAYSCRIBE_CONFIG.baseUrl}/payouts/transfer`, {
-        method: 'POST',
-        headers: {
-          'Authorization': PAYSCRIBE_CONFIG.apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
+      // Security fix (Task 67): was a direct fetch() to Payscribe with
+      // the secret key attached client-side (see this function's own
+      // PAYSCRIBE_CONFIG comment above for why that's gone). Now calls
+      // the new server-side proxy Edge Function instead — same request
+      // body shape, same response shape passed through unchanged, so
+      // everything below this call is unmodified.
+      const { data, error: invokeError } = await supabase.functions.invoke(
+        'payscribe-transfer',
+        { body: requestBody }
+      );
 
-      const data = await response.json();
+      if (invokeError) {
+        console.error('Payscribe transfer invoke error:', invokeError);
+        return { success: false, message: 'Network error. Please check your connection and try again.' };
+      }
+
       console.log('Payscribe transfer response:', data);
 
       if (data.status === true) {

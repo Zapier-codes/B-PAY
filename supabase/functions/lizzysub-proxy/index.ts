@@ -1,8 +1,17 @@
 // supabase/functions/lizzysub-proxy/index.ts
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-// Hardcoded API token (server-side only, not exposed to clients)
-const LIZZYSUB_TOKEN =
-	"b5b39c2645893a318c432507d00a91270f39bd987e5fcc904dc72276a00c";
+// Security fix (Task 67, mavins-web handover.md): this token used to
+// be hardcoded directly in source, in a PUBLIC repo — a live,
+// exploitable credential exposed to anyone who ever viewed this file
+// on GitHub, independent of and in addition to the .env file already
+// flagged separately. Now read from a server-only environment
+// variable (set via `supabase secrets set LIZZYSUB_API_KEY=...` on
+// this project — never prefixed with EXPO_PUBLIC_, which is
+// specifically the prefix that gets a variable bundled into the
+// CLIENT app; that prefix on a secret is what created this exact
+// class of problem for Payscribe's key elsewhere in this repo, see
+// that fix's own comment).
+const LIZZYSUB_TOKEN = Deno.env.get("LIZZYSUB_API_KEY");
 const corsHeaders = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Headers":
@@ -18,6 +27,22 @@ serve(async (req) => {
 		});
 	}
 	try {
+		if (!LIZZYSUB_TOKEN) {
+			console.error("lizzysub-proxy: LIZZYSUB_API_KEY is not set");
+			return new Response(
+				JSON.stringify({
+					status: "error",
+					message: "Server misconfigured (LIZZYSUB_API_KEY not set)",
+				}),
+				{
+					status: 500,
+					headers: {
+						...corsHeaders,
+						"Content-Type": "application/json",
+					},
+				},
+			);
+		}
 		if (req.method !== "POST") {
 			return new Response(
 				JSON.stringify({
