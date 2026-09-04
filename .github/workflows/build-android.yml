@@ -1,0 +1,171 @@
+name: Build Android APK (no EAS)
+
+# Task 67 Part a's own fork context (see mavins-web's handover.md):
+# this replaces `eas build` entirely -- no Expo cloud build service
+# involved anywhere in this workflow. Modeled closely on Velune's own
+# already-working `.github/workflows/build-tenant.yml` (same JDK/
+# Android SDK/Gradle-caching/signing shape), adapted for the one real
+# difference: this is a MANAGED Expo project with no `android/` folder
+# committed at all (confirmed -- `ls android` finds nothing), so an
+# `expo prebuild` step has to generate that native project fresh before
+# a plain Gradle build can run against it. Velune never needed this
+# step since it's already a native project.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Gradle build variant to run'
+        required: true
+        default: 'assembleRelease'
+        type: choice
+        options:
+          - assembleRelease
+          - assembleDebug
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ─── Cache Gradle dependencies ──────────────────────────────────
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ─── Cache Android SDK ──────────────────────────────────────────
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+          key: ${{ runner.os }}-android-sdk-${{ hashFiles('android/**/build.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-
+
+      # ─── Generate the native android/ project ───────────────────────
+      # This is the step that actually replaces `eas build`'s own
+      # managed-build behavior. `--clean` guarantees a fresh native
+      # project every run rather than trusting a stale committed one
+      # (there isn't one committed at all today, but --clean also
+      # protects against a future session accidentally committing
+      # android/ and this step then merging onto a stale copy).
+      # EXPO_PUBLIC_* vars must be present in the environment for THIS
+      # step and the Gradle build step below -- Metro bakes them into
+      # the JS bundle at bundle time, not at prebuild time alone.
+      - name: Expo prebuild (generates android/ natively, no EAS)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build APK
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        working-directory: android
+        run: ./gradlew ${{ github.event.inputs.build_type || 'assembleRelease' }}
+
+      # ─── Sign the APK, same pattern as Velune's own workflow ────────
+      # No signing config exists anywhere in this repo today (confirmed
+      # via grep) -- EAS previously managed this via its own hosted
+      # credentials. If you want the SAME signing identity as an
+      # already-published build (so existing installs can update in
+      # place instead of needing a fresh install), export it first via
+      # `eas credentials -p android` before EAS access is removed, and
+      # base64-encode that keystore for KEYSTORE_BASE64 below rather
+      # than generating a brand-new one.
+      - name: Sign APK (if keystore provided)
+        if: github.event.inputs.build_type != 'assembleDebug'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No keystore provided, skipping signing -- APK stays unsigned"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
+          ZIPALIGN=$(find "$ANDROID_HOME" -name zipalign -type f 2>/dev/null | sort -V | tail -1)
+          APKSIGNER=$(find "$ANDROID_HOME" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          if [ -z "$ZIPALIGN" ] || [ -z "$APKSIGNER" ]; then
+            echo "::error::zipalign/apksigner not found under \$ANDROID_HOME"
+            exit 1
+          fi
+          UNSIGNED=$(find android/app/build/outputs/apk -name '*-unsigned.apk' | head -1)
+          if [ -z "$UNSIGNED" ]; then
+            echo "::error::No unsigned APK found under android/app/build/outputs/apk"
+            exit 1
+          fi
+          ALIGNED="${UNSIGNED%-unsigned.apk}-aligned.apk"
+          SIGNED="${UNSIGNED%-unsigned.apk}.apk"
+          "$ZIPALIGN" -v -p 4 "$UNSIGNED" "$ALIGNED"
+          "$APKSIGNER" sign --ks keystore.jks \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --out "$SIGNED" \
+            "$ALIGNED"
+          "$APKSIGNER" verify --verbose "$SIGNED"
+          rm "$UNSIGNED" "$ALIGNED" keystore.jks
+
+      - name: Compute semantic version
+        id: semver
+        run: |
+          run_num=${{ github.run_number }}
+          major=$((run_num / 10000))
+          minor=$(((run_num / 100) % 100))
+          patch=$((run_num % 100))
+          echo "VERSION=${major}.${minor}.${patch}" >> $GITHUB_ENV
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bpay-android-${{ env.VERSION }}
+          path: android/app/build/outputs/apk/**/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_type != 'assembleDebug'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: "B-PAY Android - Build ${{ env.VERSION }}"
+          files: android/app/build/outputs/apk/**/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
