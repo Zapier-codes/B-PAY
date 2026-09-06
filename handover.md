@@ -517,6 +517,70 @@ found). Not started:
 
 ---
 
+## Task 13 — Dynamic light/dark theming (actually functional, not decorative) [~]
+
+**Trigger:** direct product-owner instruction ("dynamic themes for lighting
+and dark mode"). **Partially built this session — first real code change
+in this repo, not just documentation.** Split:
+
+- **13a. Theme foundation — done this session:**
+  - `constants/colors.ts` — added a real `light` scheme (previously only
+    `dark` existed), same amber/gold brand hue family re-lightened for a
+    light background, not a generic swap-in palette.
+  - `hooks/useThemeColors.ts` — new, wraps the pre-existing (but unused
+    outside one file) `useTheme()`/`ThemeProvider` from
+    `context/theme-context.tsx`. Returns the active palette, an `isDark`
+    boolean, and the setter, so screens don't need to import `colors` and
+    index by `colorScheme` themselves.
+  - `app/(app)/settings.tsx` — the "Dark Mode" switch was **pure
+    decoration** before this session: `const [darkMode, setDarkMode] =
+    useState(true)`, wired to nothing but its own switch-thumb color, no
+    persistence, no effect on any other screen. Replaced with real
+    `useThemeColors()` wiring — toggling it now calls the actual
+    `setCustomColorScheme`, which persists via `ThemeProvider`'s existing
+    `AsyncStorage` logic and updates the shared context every mounted
+    screen can read.
+  - **Verification done: brace/paren-balance check only, same standing
+    limitation as everything else in this file — neither sandbox can run
+    Expo/React Native.** Not run on a device or simulator. A future
+    session (or the product owner, on a real device) should confirm the
+    switch actually re-themes the settings screen and persists across a
+    restart before this line item is considered done, not just committed.
+- **13b. NOT done — the actual app-wide retrofit, and it's the large
+  part of this task.** Confirmed this session: **73 files** under `app/`
+  and `components/` hardcode colors directly (`#000`, `#FFD700`, `#fff`,
+  etc.) instead of reading from `colors[colorScheme]`. The foundation
+  built in 13a does nothing for the rest of the app until each of those
+  73 files is migrated to call `useThemeColors()` and use its `colors.*`
+  values in place of the literals. **This did not happen this session** —
+  73 files is not a "one part" amount of work by this file's own
+  task-splitting rule; it needs to be its own set of sessions, screen by
+  screen or in small batches, not attempted in a single sitting.
+- **13c. Also not done:** `app/(app)/_layout.tsx`'s navigation-chrome
+  styling already reads `colors[colorScheme]` (pre-existing, not new this
+  session) — worth a smoke-check once 13a's light scheme exists, since
+  that fallback path (`colors[colorScheme]?.background || "#000"`) was
+  previously unreachable (only `dark` existed) and is now live for the
+  first time.
+
+---
+
+## Task 14 — "Lightweight" / modern performance pass [ ]
+
+**Trigger:** direct product-owner instruction ("modern adjustments to
+make the app lightweight"). **Not started, and not concretely scoped
+yet** — "lightweight" wasn't defined further (bundle size? re-render
+count? image asset weight? cold-start time?). Before building anything
+here, the next session touching this task should either get a concrete
+target from the product owner or run an actual measurement first
+(bundle analyzer, `Animated` usage audit — note several screens already
+run continuous looping animations per Task 12's watermark pulse, which
+has a real battery/perf cost across 28+ screens simultaneously if a user
+navigates between them quickly) rather than guessing at "sophisticated"
+changes with no baseline to compare against.
+
+---
+
 ## Suggested order
 
 1 (decision) → 10 (edge-function centralization, right after 1c lands) →
@@ -527,10 +591,25 @@ once) → 5 (liquidity reconciliation, needs 3/4's real transaction flow to
 reconcile against) → 6 (multi-currency vaults, now optional/deferred per
 Task 11's scope note) → 7 (compliance — in practice this needs to start in
 parallel with 1, on the product-owner/legal side, not waited on until the
-end) → 12 (watermark/theming — cosmetic, lowest urgency, fine to slot in
-whenever).
+end) → 13b (the 73-file color retrofit — do this in batches alongside
+whichever screens Task 9 touches, not as one giant separate pass) → 9
+(stub screens — see note below on why these are blocked, not skipped) →
+12 (watermark component) → 14 (perf pass, once there's something concrete
+to measure against).
 
-**Nothing above has been built this session — this file is the plan, not
-a status report.** Next session should pick Task 1 (it blocks everything
-else) and produce 1a's full inventory as its one part, per this file's own
-task-splitting rule.
+**Task 9 (stub screens) is intentionally not touched yet, and shouldn't
+be until 1c/10/11 land.** All five stub items in Task 9 are payment or
+auth surfaces (`send/tabs/International|DigitalDollars|eNaira`,
+`TransferBottomSheet`, biometric login) — building real logic into them
+now would mean either wiring them to the direct-provider pattern Task 1b
+just decided to retire, or faking functionality against a backend
+(Task 10/11) that doesn't exist yet. Building them twice is worse than
+waiting.
+
+**This session's actual code change is Task 13a only** (theme foundation
++ the Settings toggle) — everything else above remains a plan, not a
+status report. Next session should pick Task 1c's first migration (the
+`payment.ts` → `/pay` swap) — it still blocks the largest share of
+what's left — or, if the product owner would rather see visible progress
+first, a small batch of Task 13b's color retrofit (5-10 files, not all
+73 at once) is a reasonable, low-risk alternative starting point.

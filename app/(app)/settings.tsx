@@ -18,6 +18,7 @@ import {
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "@/stores/auth-store";
 import { router } from "expo-router";
+import { useThemeColors } from "@/hooks/useThemeColors";
 import * as Haptics from "expo-haptics";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
@@ -462,7 +463,7 @@ export default function Settings() {
   const auth = useAuth();
   const [notifications, setNotifications] = useState(true);
   const [biometric, setBiometric] = useState(false);
-  const [darkMode, setDarkMode] = useState(true);
+  const { isDark, setColorScheme } = useThemeColors();
   const [showLogoutAlert, setShowLogoutAlert] = useState(false);
   const [showAccountInfo, setShowAccountInfo] = useState(false);
   const [logoutCountdown, setLogoutCountdown] = useState(0);
@@ -679,10 +680,10 @@ export default function Settings() {
               <Text style={styles.settingTitle}>Dark Mode</Text>
             </View>
             <Switch
-              value={darkMode}
-              onValueChange={setDarkMode}
+              value={isDark}
+              onValueChange={(value) => setColorScheme(value ? "dark" : "light")}
               trackColor={{ false: '#333', true: '#FFD700' }}
-              thumbColor={darkMode ? "#000" : "#f4f3f4"}
+              thumbColor={isDark ? "#000" : "#f4f3f4"}
               ios_backgroundColor="#333"
             />
           </View>
