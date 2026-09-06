@@ -89,27 +89,69 @@ place (a signature-verification bug, a currency bug) doesn't propagate to
 the other, and it's not obvious from either repo alone that the duplicate
 exists.
 
-**Not split into parts yet — this session's job is confirming the shape of
-the problem, not fixing it (needs a product-owner decision before any code
-changes: which side wins).**
+**1a — full inventory, done this session.** Every provider call in this
+app's own `supabase/functions/`, checked one by one against whether
+B-Pay-backend already has an equivalent:
 
-- 1a. Inventory: list every provider call this app's own Edge Functions
-  make directly (not yet done — `payscribe-transfer`, `payscribe_balance`,
-  `paystack-webhook` confirmed to exist and reference Payscribe/Paystack
-  directly this session; full call-by-call inventory of what each one does
-  vs. B-Pay-backend's equivalent route is NOT done yet).
-- 1b. Decision needed from the product owner: does B-Pay-backend become the
-  **sole** caller of every payment provider going forward (this app's Edge
-  Functions become thin proxies to B-Pay-backend, or are retired entirely),
-  or does this app keep its own direct integration for some providers and
-  B-Pay-backend for others? Mavins-web's own Task 71 ("B-Pay-backend
-  becomes the single source of truth for all payment/utility services")
-  suggests the intended direction is full consolidation — but that task
-  lives in a different repo's handover and hasn't been confirmed against
-  this app specifically.
-- 1c. Once decided: migration plan (not written yet) for moving this app's
-  wallet screens off its own direct Edge Functions and onto B-Pay-backend's
-  `/pay`, `/verify`, `/payout`, `/payout/verify` routes.
+| Function | Calls directly | B-Pay-backend equivalent? |
+|---|---|---|
+| `payment/index.ts` | `POST api.paystack.co/transaction/initialize` | Yes — `POST /api/pay` (provider `paystack`) |
+| `verify-paystack-transaction/index.ts` | `GET api.paystack.co/transaction/verify/:ref` | Yes — `GET /api/verify` |
+| `paystack-webhook/index.ts` | Paystack webhook, own signature check | Yes — `POST /api/webhooks/paystack` |
+| `payscribe-transfer/index.ts` | Payscribe transfer API | Yes — `POST /api/pay` (provider `payscribe`, action `bank_transfer`) |
+| `payscribe_balance/index.ts` (file header still says `sync-payscribe-balance`, name was changed without updating the comment) | `GET api.payscribe.ng/api/v1/wallet/balance` | No direct route today, but same provider/credential B-Pay-backend already holds |
+| `lizzysub-proxy/index.ts` | `lizzysub.com/api/data` (VTU) | **No** — B-Pay-backend has no Lizzysub integration yet (Mavins-web's Task 71 flags this as future work on that repo) |
+| `exam-proxy/index.ts` | exam-pin vending API | **No** — no equivalent anywhere in B-Pay-backend |
+| `electric-validation/index.ts` | electricity-bill validation API | **No** — no equivalent anywhere in B-Pay-backend |
+| `delete-account`, `offer`, `resolve_tag`, `send-push-notification` | no external payment provider | N/A — not a duplication concern either way |
+
+**Korapay and Juicyway: zero direct calls found anywhere in this app.**
+Payout can be adopted straight from B-Pay-backend with nothing to retire
+on that side.
+
+**1b — decided this session, by direct product-owner instruction:
+B-Pay-backend becomes the sole caller of every payment provider this app
+uses.** This app's own Paystack/Payscribe Edge Functions are retired, not
+kept as a parallel path. The three utility integrations
+(`lizzysub-proxy`, `exam-proxy`, `electric-validation`) are a different
+case — B-Pay-backend has nothing to switch to yet, so those need porting
+into B-Pay-backend first (new task, not yet filed — B-Pay-backend's own
+Task 71 already covers Lizzysub specifically; exam-pin and electricity
+validation aren't mentioned anywhere in that repo's handover yet and need
+their own entry there).
+
+**1c — migration plan, per function, not yet built:**
+- `payment/index.ts` → replace body with a call to B-Pay-backend's
+  `POST /api/pay` (`action: "collect_payment"` or explicit
+  `provider: "paystack"`), forwarding `X-Internal-Api-Key`. Whatever
+  currently calls this Edge Function client-side needs to point at the
+  Edge Function still (keep the Supabase Auth/RLS boundary between the
+  app and any backend secret), with the Edge Function itself becoming a
+  thin proxy — same shape as Mavins-web's own `initialize-payment`
+  function already uses for the exact same backend.
+- `verify-paystack-transaction/index.ts` → thin proxy to
+  `GET /api/verify?reference=...&provider=paystack`.
+- `paystack-webhook/index.ts` → **do not simply delete.** Paystack's
+  dashboard webhook URL currently points at this function; retiring it
+  means either re-pointing that dashboard URL at B-Pay-backend's own
+  `/api/webhooks/paystack` (manual step, outside any sandbox's reach,
+  same class of step Mavins-web's Task 33-1b flagged for its own Korapay
+  webhook re-point) or keeping this function alive purely as a forward-
+  to-B-Pay-backend relay until the dashboard is re-pointed. Decide which
+  before deleting anything — a dropped webhook silently breaks payment
+  confirmation, it doesn't fail loudly.
+- `payscribe-transfer/index.ts` → thin proxy to `POST /api/pay`
+  (`action: "bank_transfer"`, routes to `payscribe` per B-Pay-backend's
+  own `ROUTING_RULES`).
+- `payscribe_balance/index.ts` → **no direct B-Pay-backend route exists
+  for this today** (routes.js has no balance-check endpoint for any
+  provider besides the payout-side `/banks`). Needs a new route added to
+  B-Pay-backend first, or this stays a direct call as a deliberate,
+  documented exception — product-owner call, not decided yet.
+- None of the above is built yet. Per this file's own task-splitting
+  rule, the next session should pick **one** of these five (the
+  `payment.ts` → `/pay` swap is the most self-contained starting point)
+  rather than doing all five in one sitting.
 
 ---
 
@@ -251,6 +293,44 @@ wire real money movement through this app:
   Payscribe/Paystack keys (Task 1's duplication finding) in a second
   location beyond B-Pay-backend's own; consolidating per Task 1 also
   shrinks this surface.
+
+---
+
+## Task 9 — Complete stub/incomplete screens [ ]
+
+**Trigger:** requested directly by the product owner, plus a real
+grep-and-read pass this session (not just a keyword match — every hit
+below was opened and confirmed, filtering out normal TextInput
+`placeholder=` props, which are not stubs). Split, none started:
+
+- 9a. **`send/tabs/International.tsx`, `DigitalDollars.tsx`,
+  `eNaira.tsx`** — all three are literally just a "Coming Soon" screen,
+  26 lines each, no logic behind them at all. Likely the biggest single
+  chunk of work in this task: International in particular is the same
+  cross-border flow Task 6 (multi-currency) above already depends on, so
+  building this screen for real and closing Task 6's design gap are the
+  same piece of work, not two.
+- 9b. **`components/TransferBottomSheet.tsx`** — never built past the
+  default Expo/RN scaffold (`<Text>TransferBottomSheet</Text>`, 9 lines).
+  Needs the actual transfer-confirmation bottom sheet design/content
+  clarified before building — not enough context in the repo alone to
+  know what this was meant to show without the product owner's own spec.
+- 9c. **`ajo/tabs/creator-tools.tsx`** — the "AJO" (rotating
+  savings-group) creator tools screen is mostly built (1267 lines), but
+  "Suspend AJO" and "Cancel AJO" are both stub `Alert.alert(...,
+  'This feature is coming soon')` calls, not real actions.
+- 9d. **`(Auth)/welcome-back.tsx`** — biometric login is a stub toast
+  (`"Biometric login coming soon!"`), not implemented.
+- 9e. **Not yet resolved, needs checking before any of the above:** both
+  `app/(app)/login.tsx` and `app/(app)/(Auth)/login.tsx` exist. Unclear
+  which one the router actually uses — possible dead duplicate. Worth
+  confirming which is live before spending time polishing either, since
+  fixing the wrong one wastes the session.
+
+None of 9a–9e is built yet — flagging the full set here so a future
+session doesn't rediscover them one at a time, per this file's own
+"don't lose an inventory to the next 60 session notes" lesson (see
+Mavins-web's own Task 52 note on exactly that failure mode).
 
 ---
 
