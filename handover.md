@@ -331,17 +331,14 @@ Split:
 - 2c. Atomic RPC(s) for credit/debit, replacing every direct
   `update profiles set balance = ...` call-site — inventory of those
   call-sites not done yet.
-- 2d. Backfill: reconcile existing `profiles.balance` values into opening
-  ledger entries, one-time, carefully — needs the product owner directly
-  for this step, not a sandbox decision. **Also now needs an answer to a
-  question Task 15's "discard the old project" framing raises but
-  doesn't settle: are this app's existing users/balances (on the
-  project being discarded) being migrated into the new shared project at
-  all, or is this a clean launch on the new project with no carried-over
-  accounts?** Materially changes whether 2d is "reconcile real balances"
-  or "nothing to backfill, starts at zero" — worth confirming before
-  building either way.
-- 2e. Migration + verification plan, once 2b–2d are actually written.
+- 2d. ~~Backfill: reconcile existing `profiles.balance` values~~ —
+  **not needed. Confirmed by direct product-owner instruction: this is
+  a clean launch, nothing carried over from the old project.** No
+  existing users/balances to migrate or reconcile — the new
+  `bpay_wallet_ledger` (2b) starts empty on the new project, every user
+  begins at zero, no backfill step exists. Simplifies 2e as well (no
+  backfill to verify).
+- 2e. Migration + verification plan, once 2b–2c are actually written.
 
 ---
 
@@ -668,10 +665,8 @@ intended.
   directly this session. Full collision-check against it now recorded
   in Task 2 above — `profiles` is free to use, `wallet_ledger` is
   taken (Mavins-web's own, wrong shape for this app to reuse).
-- **Open question this decision surfaces, not yet answered:** are this
-  app's existing users/balances (on the project being discarded)
-  migrated into the new shared project, or is this a clean launch with
-  no carried-over accounts? Also flagged in Task 2's own 2d.
+- ~~Open question: are existing users/balances migrated in?~~ —
+  **resolved: clean launch, nothing carried over** (see Task 2's own 2d).
 - Once naming is settled: write this app's own tables (`profiles`, the
   new `bpay_wallet_ledger`, etc.) as migrations in *this* repo, checked
   against Mavins-web's actual schema (already done, see Task 2) rather
