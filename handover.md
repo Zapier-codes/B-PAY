@@ -287,24 +287,61 @@ work (`credit_wallet_deposit`, `debit_wallet_balance`) after finding races
 and inconsistent state. Building payout/liquidity features on top of a bare
 column here would repeat that mistake with real user money.
 
-Split, not started:
-- 2a. Pull the actual live schema for `profiles` and any other
-  balance-adjacent tables (dashboard export or `pg_dump` against the real
-  project — neither sandbox has a network path to do this itself) and
-  commit it to this repo, closing the "empty migration file" gap.
-- 2b. Design a `wallet_ledger`-style table (double-entry or single-entry
-  append-only, decision needed) — reference the row shape the ledger fix
-  eventually needs; don't just copy Mavins-web's schema verbatim since that
-  app's wallet semantics (campaign budgets, listener payouts) aren't this
-  app's (person-to-person transfers, bill pay, savings/vaults per
-  `readme.md`'s feature list).
+**Update (this session, per Task 15): no live DB dump needed after
+all.** Per direct product-owner instruction, this app's current
+separate Supabase project is being **discarded entirely** — this app is
+being repointed onto Mavins-web's own project
+(`atojskxrxfsbpeefigtm`), and that project's real schema already lives
+in `mavins-web`'s own repo (`supabase_schema.sql` + `supabase/
+migrations/`), checked directly this session rather than assumed. That
+closes 2a below without needing dashboard/CLI access this sandbox
+doesn't have.
+
+**Real collision-check done against that actual schema, not guessed:**
+existing tables there are `users`, `tracks`, `track_campaigns`,
+`campaign_daily_metrics`, `seed_interaction_log`,
+`artist_growth_milestones`, `wallet_ledger`, `shares`, and
+`payment_sessions` (from a later migration). Two things confirmed:
+- **`profiles` (the name this app's own user/wallet table needs) does
+  not exist anywhere in that schema** — safe to use, no rename needed.
+- **`public.wallet_ledger` already exists there — but it's Mavins-web's
+  own, not a generic reusable ledger.** It FKs to `public.users(id)`
+  (not this app's own `profiles`) and its `type` CHECK constraint is
+  scoped to Mavins-web's own domain
+  (`'earning' | 'withdrawal' | 'bonus' | 'fee'`, campaign/artist
+  semantics) — using it for this app's own wallet activity would both
+  violate the FK (wrong parent table) and force this app's own
+  transaction types through a constraint that doesn't fit them. Per
+  Task 15's own "separate tables, standalone function" decision, this
+  app needs **its own, distinctly-named ledger table** (e.g.
+  `bpay_wallet_ledger`, exact name TBD when 2b is actually built) —
+  not a reuse, and not a name close enough to collide/confuse
+  (`wallet_ledger` itself is taken).
+
+Split:
+- ~~2a. Pull the actual live schema~~ — **done via the above, no dump
+  needed.**
+- 2b. Design a `bpay_wallet_ledger`-style table (double-entry or
+  single-entry append-only, decision needed), FK'd to this app's own
+  `profiles(id)`, with its own `type` constraint fitted to this app's
+  actual transaction types (person-to-person transfers, bill pay,
+  savings/vaults per `readme.md`'s feature list) — not copied from
+  Mavins-web's `wallet_ledger` shape, which is a different domain.
+  Not started.
 - 2c. Atomic RPC(s) for credit/debit, replacing every direct
   `update profiles set balance = ...` call-site — inventory of those
   call-sites not done yet.
 - 2d. Backfill: reconcile existing `profiles.balance` values into opening
   ledger entries, one-time, carefully — needs the product owner directly
-  for this step, not a sandbox decision.
-- 2e. Migration + verification plan, once 2a–2d are actually written.
+  for this step, not a sandbox decision. **Also now needs an answer to a
+  question Task 15's "discard the old project" framing raises but
+  doesn't settle: are this app's existing users/balances (on the
+  project being discarded) being migrated into the new shared project at
+  all, or is this a clean launch on the new project with no carried-over
+  accounts?** Materially changes whether 2d is "reconcile real balances"
+  or "nothing to backfill, starts at zero" — worth confirming before
+  building either way.
+- 2e. Migration + verification plan, once 2b–2d are actually written.
 
 ---
 
@@ -581,7 +618,68 @@ changes with no baseline to compare against.
 
 ---
 
-## Suggested order
+## Task 15 — Confirmed dual-purpose architecture: same fork, two roles, one shared Supabase project [x] (decision confirmed and documented; wiring itself not yet built)
+
+**Trigger:** a false citation found in `.github/CI_SETUP.md` (see its
+own "CORRECTION" note) raised a real, previously-unresolved question —
+resolved this session by direct product-owner instruction, and found to
+already independently match a resolution recorded in B-Pay-backend's own
+`handover.md` Task 43 ("Second correction, 2026-09-05," written before
+this conversation, discovered by cloning that repo fresh and reading it
+directly, not assumed).
+
+**Confirmed architecture, industry-standard framing (per product owner,
+their own words): this app serves two purposes off one codebase.**
+1. **Standalone bank/wallet app** — pay-in, payout, and liquidity all
+   route through B-Pay-backend (Render) as the sole payment engine, per
+   Task 1's own consolidation decision. This app can function completely
+   on its own, independent of Mavins-web.
+2. **Payment rail for Mavins-web's listen-and-earn feature** — this
+   app's Supabase project **is** Mavins-web's own
+   (`atojskxrxfsbpeefigtm.supabase.co`), so a listener's earnings can be
+   credited to their linked B-Pay wallet directly, via the `bpay_tag`
+   mechanism Mavins-web's own migration 034 already added
+   (`public.users.bpay_tag`, resolved against this app's own
+   `profiles.bpay_tag` through the existing `resolve_tag` Edge
+   Function — that lookup mechanism already exists and was built by a
+   different session, independent of anything in this file).
+
+**Explicitly decided, product owner's own words: `profiles` (this app's
+table) and Mavins-web's `public.users` stay separate tables, not
+merged, specifically so purpose (1) keeps working even if Mavins-web
+disappeared entirely.** The two apps connect only through the
+`bpay_tag` soft-reference/lookup, never a foreign key or shared table.
+This resolves what would otherwise have been an open schema-design
+question the moment "same Supabase project" was confirmed — recording
+it explicitly so no future session re-opens it or assumes a merge was
+intended.
+
+**Not yet done, now unblocked by this decision:**
+- Confirm B-PAY's actual `EXPO_PUBLIC_SUPABASE_URL`/`ANON_KEY` GitHub
+  secrets are genuinely set to `atojskxrxfsbpeefigtm` (per
+  `CI_SETUP.md`'s instructions) — the instructions exist, but no session
+  has confirmed the secrets were actually set to that value, since no
+  sandbox can read GitHub Actions secrets.
+- ~~Pull the real, current schema of `atojskxrxfsbpeefigtm`~~ — **not
+  needed after all: per direct product-owner instruction, this app's
+  current separate Supabase project is being discarded entirely, and
+  the target project's real schema already lives in `mavins-web`'s own
+  repo** (`supabase_schema.sql` + `supabase/migrations/`), checked
+  directly this session. Full collision-check against it now recorded
+  in Task 2 above — `profiles` is free to use, `wallet_ledger` is
+  taken (Mavins-web's own, wrong shape for this app to reuse).
+- **Open question this decision surfaces, not yet answered:** are this
+  app's existing users/balances (on the project being discarded)
+  migrated into the new shared project, or is this a clean launch with
+  no carried-over accounts? Also flagged in Task 2's own 2d.
+- Once naming is settled: write this app's own tables (`profiles`, the
+  new `bpay_wallet_ledger`, etc.) as migrations in *this* repo, checked
+  against Mavins-web's actual schema (already done, see Task 2) rather
+  than assumed to be a clean slate.
+
+---
+
+
 
 1 (decision) → 10 (edge-function centralization, right after 1c lands) →
 2 (ledger foundation) → 3 & 4 (pay-in/payout, can run in parallel once

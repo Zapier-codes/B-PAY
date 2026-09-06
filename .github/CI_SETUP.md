@@ -6,6 +6,51 @@ runners via `expo prebuild` + a direct Gradle build, the same shape
 Velune's own `.github/workflows/build-tenant.yml` already uses
 successfully for a similar Android build.
 
+## ⚠️ CORRECTION (added a later session) — the section below cites a decision that was never actually made
+
+**The heading and first paragraph below claim this was "per Task 67's
+own decision (mavins-web's `handover.md`)." That is not accurate, and
+this correction is here so no future session inherits the false
+citation.** Checked directly against mavins-web's own `handover.md`:
+**Task 67 says nothing about Supabase reconfiguration anywhere in its
+full text** — it's scoped to the bpay-tag route and 3 unrelated
+security fixes. The actual proposal to point this app at Mavins-web's
+Supabase project is a **different** task — **Task 70** — and Task 70
+is explicitly marked `[ ]` **not started**, with its own text stating
+plainly: *"genuinely unclear, not decided here... needs explicit
+reconciling with the product owner before either is built."* Task 70
+also flags a direct, unresolved conflict with a separate proposal in
+B-Pay-backend's own Task 43 (which instead has this app point at
+B-Pay-backend as its payment engine — the consolidation this app's own
+`handover.md` Task 1 has actually been building toward).
+
+**Update (same later session, after the finding above was raised
+directly): the underlying decision is now genuinely confirmed** — by
+direct product-owner instruction, and independently corroborated in
+B-Pay-backend's own `handover.md` Task 43 ("Second correction,
+2026-09-05," written before this conversation and discovered
+independently): **one fork serves both purposes** — (1) payment/payout
+calls consolidated through B-Pay-backend (this app's own Task 1), and
+(2) this app's Supabase project genuinely is Mavins-web's own
+(`atojskxrxfsbpeefigtm`), so Mavins-web can credit listener payout
+wallets directly. **The citation below is still wrong** (Task 67 never
+said this; the real task is 70, and 70 alone doesn't confirm it either)
+— but the substance it asserted turned out to be correct, confirmed
+through a different, legitimate path. Leaving the wrong-citation finding
+above intact rather than deleting it: a false citation that happens to
+point at a true conclusion is still worth knowing about, since the next
+one might not.
+
+**Practical upshot: it is not confirmed which Supabase project this
+app's GitHub Actions secrets should actually point at.** If
+`EXPO_PUBLIC_SUPABASE_URL`/`EXPO_PUBLIC_SUPABASE_ANON_KEY` are
+currently set to Mavins-web's project per the (mis-cited) instructions
+below, that was done on the strength of a citation that doesn't hold up
+— worth confirming directly with the product owner which project this
+app should actually build against before trusting anything below this
+line at face value. See this repo's own `handover.md`, Task 15, for the
+full write-up.
+
 ## Reconfigured onto Mavins-web's own Supabase project (Task 67)
 
 Per Task 67's own decision (mavins-web's `handover.md`): this fork
