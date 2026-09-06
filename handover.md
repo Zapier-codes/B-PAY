@@ -38,7 +38,121 @@ Kept in sync with the same section in Mavins-web's and B-Pay-backend's own
   provider logic. This duplication is Task 1 below, not a design to build
   more features on top of as-is.
 
-## Unified hand-off command format — MANDATORY, every session, all three repos
+## Architecture decisions — confirmed this session by direct product-owner instruction, binding on all future work
+
+These three are standing rules, not one-off tasks — every task below (and
+any future one) has to comply with them, the same way the "Sibling repos"
+and "Build-focus" sections above already bind every session.
+
+### A. No screen/component calls a backend directly — ever
+
+**Rule:** page/screen components never construct their own `fetch()` to a
+provider, B-Pay-backend, or `supabase.functions.invoke(...)` call inline.
+All of that lives behind a single Edge-Functions service layer,
+initialized once at app boot, that components import and call — they
+never touch the network themselves.
+
+**Current state, confirmed this session, is the exact opposite of this
+rule — flagging precisely so the gap is understood, not glossed over:**
+- `app/(app)/send/success.tsx` defines its own `executePayscribeTransfer`
+  function inline and calls `supabase.functions.invoke(...)` directly
+  from inside a page component — the **only** `functions.invoke` call
+  anywhere in this codebase.
+- `services/country.service.ts` instantiates its **own** separate
+  `createClient(...)` Supabase client, instead of importing the one
+  shared client already exported from `config/supabase.ts` — a second,
+  redundant client instance, not a shared service.
+- No centralized Edge-Functions service module exists at all today.
+
+**Not built yet.** The shape to build toward: one module (e.g.
+`services/edgeFunctions.ts`, exact name TBD when this is actually built)
+exporting one function per Edge Function this app calls
+(`pay()`, `verifyPayment()`, `payout()`, `verifyPayout()`, `resolveTag()`,
+etc., aligned with whichever functions remain after Task 1's consolidation
+onto B-Pay-backend), built on the single shared `supabase` client from
+`config/supabase.ts`, module-initialized once rather than re-created
+per-render or per-screen. Every screen currently doing its own direct call
+(`send/success.tsx` today; more will surface once Task 1c's migrations are
+actually built) gets rewired onto this layer as part of that same work —
+not a separate cleanup pass after the fact.
+
+### B. Geo-detected local currency, local-to-local cross-border transfers
+
+**Rule, stated directly by the product owner:** every user sees their own
+local currency as the default, detected via **ipapi.co** at app init —
+same third-party service Mavins-web's own `handover.md` already uses for
+this exact purpose (Task 27, "GeoProvider: ipapi.co geo-detection at app
+initialization, global + login-persistent," originated as B-Pay-backend's
+own Task 25) — reuse that precedent's pattern (global context, persists
+across logins) rather than re-deriving it from scratch. **Not built in
+this repo yet — zero references to ipapi.co found anywhere in this
+codebase this session.**
+
+**The payment model this enables, in the product owner's own words:** a
+sender pays in their own local currency, and the recipient receives in
+their own local currency — conversion happens transparently in the
+pipeline, not by requiring either party to hold or think in a shared
+intermediate currency. Worked example given: a sender in Ghana pays in
+GHS; a recipient in Kenya receives KES, directly. **Per-user multi-currency
+"vault" wallets (an explicit USD balance, etc.) are optional and
+deliberately NOT required for this to work** — narrows Task 6 below:
+the mandatory piece is server-side FX conversion on each transaction, not
+giving every user several currency-labeled balances to manage.
+
+**Settlement speed, to be reflected honestly in the UI, not oversold:**
+app-to-app transfers (this app to another B-PAY wallet) settle instantly —
+an internal ledger movement (Task 2), no external rail involved. Transfers
+from this app to an external bank go through the actual payout rail
+(Korapay today) and take that rail's normal settlement time — the UI must
+not promise "instant" for that path.
+
+**One real technical constraint to check before relying on this, not yet
+confirmed:** ipapi.co's free tier is rate-limited (historically 1,000
+requests/month) — worth confirming current plan/tier before wiring this
+into every app boot, and caching the lookup (once per install or per
+login, matching Mavins-web's own "login-persistent" pattern) rather than
+calling it on every screen mount.
+
+### C. Watermark + theming standard — document the existing pattern, then formalize it
+
+**Found this session, not designed new — this pattern already exists,
+consistently, across 28+ screens; documenting it here so it's captured
+once instead of quietly drifting further per-screen.**
+
+- **Theme:** only one color scheme is actually defined
+  (`constants/colors.ts` → `colors.dark`), despite `ThemeProvider`
+  (`context/theme-context.tsx`) being built to support switching between
+  named schemes — there's no second scheme to switch to yet. Background is
+  a warm near-black (`hsl(29, 53%, 1%)` in `colors.dark.background`), but
+  a plain `#000` literal is also used directly in ~46 places across
+  screens instead of referencing that token — two different "black"
+  values in play, worth reconciling onto one source of truth rather than
+  two. Accent tones are warm amber/gold
+  (`button: hsl(27, 52%, 17%)`, `muted: hsl(36, 93.2%, 17.3%)`).
+- **Watermark pattern**, confirmed identical (with minor drift noted
+  below) across at least 28 screens (`send/*`, `airtime/*`, `ajo/*`,
+  `bundles/*`, `card.tsx`, `settings.tsx`, `help.tsx`, and more): a large,
+  low-opacity app-icon image, centered via an absolutely-positioned
+  wrapper (`StyleSheet.absoluteFillObject`, `justifyContent`/
+  `alignItems: 'center'`), `pointerEvents="none"` (purely decorative,
+  never intercepts touches), layered behind page content
+  (`zIndex: 1` for the watermark, `zIndex: 2` for content). Most screens
+  additionally loop a subtle pulse: scale `1 ↔ 1.08` over 2000ms, opacity
+  `0.08 ↔ 0.15` over 1500ms, via `Animated.loop(Animated.parallel([...]))`.
+  Icon source is **contextual per screen**, not one fixed logo everywhere
+  — e.g. `bundles/index.tsx` watermarks itself with `assets/icons/home.png`.
+- **Minor drift already found, worth fixing when this is centralized**:
+  size varies 280×280 vs 300×300 depending on screen, and baseline opacity
+  varies (flat `0.1` on some screens vs the `0.08–0.15` animated range on
+  others) — small, but exactly the kind of per-screen copy-paste drift
+  that gets worse over time if it isn't captured as one shared component.
+- **Not built yet:** a single shared `<ScreenWatermark icon={...} />` (or
+  similar, name TBD) component encoding the agreed values once, replacing
+  the copy-pasted style blocks currently duplicated across 28 files.
+
+---
+
+
 
 Same rules as Mavins-web's and B-Pay-backend's own copies of this section —
 not re-derived here, see either of theirs for the full rationale. Patch
@@ -244,6 +358,14 @@ not a bug. Needed, not yet built or decided:
 
 ## Task 6 — Multi-currency / cross-border (the actual "like Wise" piece) [ ]
 
+**Scope narrowed this session — see "Architecture decisions B" above.**
+The mandatory piece is server-side FX conversion so a sender's local
+currency reaches the recipient in *their* local currency automatically —
+**not** giving every user several currency-labeled balances to hold and
+manage. Per-currency "vault" wallets are now explicitly optional, a
+possible future add-on, not a requirement for this task to be considered
+done.
+
 **Not started.** Everything above gets this app to "NGN wallet with real
 pay-in/payout," not to Wise's actual defining feature: holding balances in
 multiple currencies and converting between them at a transparent rate.
@@ -253,9 +375,12 @@ Real gaps, not yet addressed by anything in this repo or B-Pay-backend:
   bugs against Juicyway's real API** (wrong auth header prefix, wrong
   endpoint path, incomplete payload) — not production-ready today,
   independent of anything built in this app.
-- No per-currency balance model exists yet anywhere in this app's schema
-  (Task 2 above is single-balance-per-user, not yet multi-currency by
-  design — worth deciding before 2b is finalized, not after).
+- No FX conversion logic exists yet anywhere in this app's schema or
+  B-Pay-backend — the actual sender-local-currency-to-recipient-local-
+  currency conversion "Architecture decisions B" describes has to be
+  designed and built, most likely as a new B-Pay-backend capability (rate
+  sourcing, spread/fee policy, conversion applied at transfer time), not
+  something either repo has today.
 - FX rate sourcing, mid-market-rate disclosure, and fee transparency (the
   specific things Wise is known for) have no design anywhere in this repo
   yet.
@@ -334,14 +459,76 @@ Mavins-web's own Task 52 note on exactly that failure mode).
 
 ---
 
+## Task 10 — Centralize all backend access behind one Edge-Functions service layer [ ]
+
+**Trigger:** direct product-owner instruction — see "Architecture
+decisions A" above for the full finding and target shape. Not split into
+parts yet; natural split once started would likely be (a) build the
+service-layer module itself against whichever Edge Functions survive
+Task 1's consolidation, (b) migrate `send/success.tsx`'s inline
+`executePayscribeTransfer` onto it — the one confirmed existing violation
+— and (c) fix `services/country.service.ts`'s redundant second Supabase
+client onto the shared one from `config/supabase.ts`. **Blocked on Task
+1c landing first** (no point building the service layer against Edge
+Functions that are about to be replaced by thin proxies to B-Pay-backend)
+— sequence this after Task 1, not before or in parallel.
+
+---
+
+## Task 11 — Geo-detected default currency + local-to-local cross-border transfers (ipapi.co) [ ]
+
+**Trigger:** direct product-owner instruction — see "Architecture
+decisions B" above for the full model and the worked Ghana→Kenya example.
+Not started; zero ipapi.co references exist in this repo today. Split, none
+started:
+- 11a. App-init geo detection via ipapi.co, mirroring Mavins-web's own
+  `GeoProvider` pattern (Task 27 in that repo's handover) — global context,
+  persists across logins, not re-queried per screen. Confirm ipapi.co's
+  current rate-limit tier before wiring this into every app boot.
+- 11b. Default-currency wiring: every balance/amount display defaults to
+  the detected local currency, not a hardcoded NGN/USD assumption — needs
+  an audit of every screen currently assuming a fixed currency (not done
+  yet).
+- 11c. Server-side FX conversion at transfer time (the actual "Ghana sender
+  pays GHS, Kenya recipient receives KES" mechanic) — this is the same
+  underlying capability Task 6 above needs; building it once should satisfy
+  both tasks, not duplicate the work.
+- 11d. UI honesty pass: app-to-app transfers labeled/behave as instant;
+  app-to-bank transfers reflect the real payout-rail settlement time, no
+  overstated "instant" claim on that path.
+
+---
+
+## Task 12 — Formalize the watermark + theming pattern into a shared component [ ]
+
+**Trigger:** direct product-owner instruction to document and standardize
+what's already in use — see "Architecture decisions C" above for the full
+audit (28+ screens, exact style values, the size/opacity drift already
+found). Not started:
+- 12a. Build the shared `<ScreenWatermark icon={...} />` component (name
+  TBD) encoding one agreed size/opacity/animation, replacing the
+  copy-pasted style blocks.
+- 12b. Migrate existing screens onto it, resolving the 280×300 and
+  opacity drift already found in the process rather than baking the
+  inconsistency into the shared component.
+- 12c. Reconcile the `#000` literal vs. `colors.dark.background` token
+  drift found in "Architecture decisions C" while touching this area,
+  since it's the same class of "one value, two representations" issue.
+
+---
+
 ## Suggested order
 
-1 (decision) → 2 (ledger foundation) → 3 & 4 (pay-in/payout, can run in
-parallel once 1+2 land) → 8 (harden 3/4 as they're built, not after) → 5
-(liquidity reconciliation, needs 3/4's real transaction flow to reconcile
-against) → 6 (multi-currency) → 7 (compliance — in practice this needs to
-start in parallel with 1, on the product-owner/legal side, not waited on
-until the end).
+1 (decision) → 10 (edge-function centralization, right after 1c lands) →
+2 (ledger foundation) → 3 & 4 (pay-in/payout, can run in parallel once
+1+2 land) → 8 (harden 3/4 as they're built, not after) → 11 (geo-currency
++ local-to-local FX — 11c overlaps Task 6's own core requirement, build
+once) → 5 (liquidity reconciliation, needs 3/4's real transaction flow to
+reconcile against) → 6 (multi-currency vaults, now optional/deferred per
+Task 11's scope note) → 7 (compliance — in practice this needs to start in
+parallel with 1, on the product-owner/legal side, not waited on until the
+end) → 12 (watermark/theming — cosmetic, lowest urgency, fine to slot in
+whenever).
 
 **Nothing above has been built this session — this file is the plan, not
 a status report.** Next session should pick Task 1 (it blocks everything
