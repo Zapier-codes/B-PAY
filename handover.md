@@ -184,7 +184,64 @@ into every app boot, and caching the lookup (once per install or per
 login, matching Mavins-web's own "login-persistent" pattern) rather than
 calling it on every screen mount.
 
-### C. Watermark + theming standard — document the existing pattern, then formalize it
+### C. B-Pay-backend is the only payment provider this app knows — no exceptions, no provider naming anywhere in this app
+
+**Rule, stated directly by the product owner, binding on every task in this
+file and every future session, and stricter than earlier drafts of this
+same section:** B-Pay-backend is not "the current default backend this app
+happens to call" — it **is** this app's payment infrastructure, full stop.
+The underlying providers B-Pay-backend routes to internally (Paystack,
+Payscribe, Korapay, Juicyway, and whichever others Task 0 in that repo
+adds) are B-Pay-backend's own implementation detail, exactly the way an
+app built on Stripe doesn't know or care which card networks or banks
+Stripe settles through underneath. This app is never the layer that names,
+selects, or falls back to one of those providers — not today, not once
+B-Pay-backend's own provider contract is actually built out (it isn't
+yet), not ever.
+
+Concretely, this rule is broader than "don't send a `provider` field in a
+request body" (the earlier framing of this section) — it covers every
+place a provider name could leak into this app's own code:
+- **Never send a `provider` field or query param to B-Pay-backend**, in a
+  request body or a query string, under any circumstance — not a real
+  provider name, not as a "temporary default," not as a workaround for a
+  B-Pay-backend gap that hasn't been fixed yet (see `verify-payment`'s own
+  file header for a concrete instance of this getting caught and reverted
+  within this same file's own migration plan).
+- **Never name a provider in this app's own function/file/folder names.**
+  `verify-paystack-transaction` was renamed to `verify-payment` this
+  session specifically because the old name baked a provider's identity
+  into this app's own directory structure — the same violation as sending
+  the field, just at the naming layer instead of the request layer.
+- **Never read, forward, log, or branch on a `provider` field that comes
+  back in a B-Pay-backend response envelope**, even for logging/debugging
+  purposes — `payment/index.ts` and `verify-payment/index.ts` both already
+  strip this deliberately.
+- **Known, temporary, un-migrated exceptions — not fixed by this rule
+  retroactively, flagged instead of silently left inconsistent:**
+  `payscribe-transfer/index.ts`, `payscribe_balance/index.ts` (file header
+  still says `sync-payscribe-balance`), and `paystack-webhook/index.ts`
+  still name a provider directly, because they are still live, un-migrated
+  direct integrations per Task 1's own inventory — `paystack-webhook`
+  specifically cannot simply be renamed or removed yet because Paystack's
+  own dashboard webhook URL points at this function's current path (see
+  Task 1c's own note on this). **These are pre-existing debt this rule
+  applies to, not exceptions to the rule** — each gets renamed/genericized
+  as part of its own migration in Task 1c, not before, and not as a
+  separate cleanup pass after.
+- This is a **standing rule for every future session touching this
+  app, not a one-time cleanup instruction** — if a future session finds
+  itself typing a provider's name into a *new* file, variable, log line,
+  or request to B-Pay-backend anywhere in this app, that is the signal to
+  stop and re-read this section, not a sign the rule doesn't apply to
+  whatever new thing is being built. The contract B-Pay-backend exposes
+  for this may still evolve (Task 0 in that repo is explicit that the
+  ten-provider orchestration layer isn't fully built yet) — this app's
+  own obligation not to name a provider does not wait on that contract
+  being finished; it applies to the contract as it exists today, and to
+  whatever it becomes.
+
+### D. Watermark + theming standard — document the existing pattern, then formalize it
 
 **Found this session, not designed new — this pattern already exists,
 consistently, across 28+ screens; documenting it here so it's captured
@@ -407,8 +464,18 @@ their own entry there).
     it — this function used to convert because it *was* the direct
     Paystack call; that's no longer true now that B-Pay-backend sits
     in between.
-- `verify-paystack-transaction/index.ts` → thin proxy to
-  `GET /api/verify?reference=...&provider=paystack`.
+- `verify-paystack-transaction/index.ts` → **built this session (see
+  patch), and renamed to `verify-payment/index.ts` in the same patch —
+  see Architecture decision C above.** Thin proxy to `GET /api/verify?
+  reference=...` — **deliberately no `provider` param**, correcting this
+  line's own earlier draft (which wrongly said
+  `&provider=paystack`, exactly the mistake Architecture decision C now
+  documents so it isn't repeated). Known consequence, not hidden: this
+  will 400 against the live B-Pay-backend until that repo's own
+  `/api/verify` adds a provider-agnostic, reference-only lookup — filed
+  there as an open cross-repo blocker, not worked around from this side.
+  DB side-effects (transaction/wallet/deposit writes) were left as-is —
+  out of scope for this task, belongs to Task 2's ledger work instead.
 - `paystack-webhook/index.ts` → **do not simply delete.** Paystack's
   dashboard webhook URL currently points at this function; retiring it
   means either re-pointing that dashboard URL at B-Pay-backend's own
@@ -863,10 +930,23 @@ just decided to retire, or faking functionality against a backend
 (Task 10/11) that doesn't exist yet. Building them twice is worse than
 waiting.
 
-**This session's actual code change is Task 13a only** (theme foundation
-+ the Settings toggle) — everything else above remains a plan, not a
-status report. Next session should pick Task 1c's first migration (the
-`payment.ts` → `/pay` swap) — it still blocks the largest share of
-what's left — or, if the product owner would rather see visible progress
-first, a small batch of Task 13b's color retrofit (5-10 files, not all
-73 at once) is a reasonable, low-risk alternative starting point.
+**This session's actual code changes: Task 13a (theme foundation + the
+Settings toggle, prior session) and, this session, Task 1c's second
+migration** — `verify-paystack-transaction` → `verify-payment`, proxied
+to B-Pay-backend's `/api/verify` with no `provider` param, plus
+Architecture decision C (formalizing "B-Pay-backend is the only payment
+provider this app knows," broadened from just "don't send a provider
+field" to cover naming/logging/folder-naming too, since this session
+found the earlier framing wasn't strict enough to have caught this file's
+own name). Everything else above remains a plan, not a status report.
+
+Next session should pick **one** of Task 1c's three remaining migrations
+(`payscribe-transfer`, `payscribe_balance`, or deciding+acting on
+`paystack-webhook`'s re-point) — each is its own self-contained unit per
+this file's own task-splitting rule, and each must apply Architecture
+decision C (rename off the provider's name once migrated, same as
+`verify-payment` this session) as part of that same migration, not as a
+separate follow-up pass. If the product owner would rather see visible
+progress on something other than Task 1 first, a small batch of Task
+13b's color retrofit (5-10 files, not all 73 at once) is a reasonable,
+low-risk alternative starting point.
