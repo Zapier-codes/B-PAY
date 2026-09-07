@@ -2,6 +2,7 @@
 import { useState, useCallback } from "react";
 import { supabase } from "@/config/supabase";
 import { useAuth } from "@/stores/auth-store";
+import { bpay } from "@/services/edgeFunctions";
 
 export interface UserProfile {
   id: string;
@@ -10,8 +11,8 @@ export interface UserProfile {
   first_name: string | null;
   last_name: string | null;
   bpay_tag: string | null;
-  payscribe_customer_id: string | null;
-  payscribe_account_number: string | null;
+  bpay_customer_id: string | null;
+  bpay_account_number: string | null;
   country: string;
   tier: number | null;
   verification_status: string | null;
@@ -32,7 +33,7 @@ export default function useUserProfile() {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, email, phone, first_name, last_name, bpay_tag, payscribe_customer_id, payscribe_account_number, country, tier, verification_status")
+        .select("id, email, phone, first_name, last_name, bpay_tag, bpay_customer_id, bpay_account_number, country, tier, verification_status")
         .eq("id", currentAccount.user_id)
         .single();
 
@@ -57,21 +58,13 @@ export default function useUserProfile() {
     return profile;
   }, [getUserProfile]);
 
-  // Check customer details in Payscribe
-  const checkCustomerDetails = useCallback(async (customerId: string) => {
+  // Check whether this customer has any transaction history, via BPay —
+  // never calls a provider directly, never holds a provider credential.
+  // See services/edgeFunctions.ts for why this is the only allowed shape.
+  const checkCustomerDetails = useCallback(async (_customerId: string) => {
     try {
-      const API_KEY = "ps_pk_test_5fJUELCWRxbYyqE0mylVlfeekNK9iY0990";
-      const API_BASE_URL = "https://sandbox.payscribe.ng/api/v1";
-      
-      const response = await fetch(`${API_BASE_URL}/customers/${customerId}/transactions?page=1&page_size=1`, {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      return response.ok;
+      const result = await bpay.getTransactions({ page: 1, page_size: 1 });
+      return Array.isArray(result?.transactions);
     } catch (error) {
       console.error('Error checking customer:', error);
       return false;

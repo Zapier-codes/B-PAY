@@ -14,6 +14,7 @@ import { FontAwesome5, MaterialCommunityIcons, Ionicons } from "@expo/vector-ico
 import { useAuth } from "@/stores/auth-store";
 import * as Clipboard from 'expo-clipboard';
 import { supabase } from "@/config/supabase";
+import { bpay, BPayError } from "@/services/edgeFunctions";
 
 // Custom hooks
 import useVirtualAccount from "@/hooks/useVirtualAccount";
@@ -93,7 +94,7 @@ export default function Fund() {
       return;
     }
     
-    if (!currentAccount?.payscribe_customer_id) {
+    if (!currentAccount?.bpay_customer_id) {
       Alert.alert(
         "Customer ID Missing", 
         "Your profile is not properly linked with Payscribe. Please complete the Tier 1 upgrade first."
@@ -101,80 +102,46 @@ export default function Fund() {
       return;
     }
 
-    console.log('🔍 Using customer ID from auth store:', currentAccount.payscribe_customer_id);
+    console.log('🔍 Using customer ID from auth store:', currentAccount.bpay_customer_id);
     
     setIsGenerating(true);
     
     try {
-      // Create virtual account using correct endpoint
-      const key = process.env.EXPO_PUBLIC_PAYSCRIBE_PUBLIC_KEY;
-      const baseUrl = process.env.EXPO_PUBLIC_PAYSCRIBE_BASE_URL || "https://sandbox.payscribe.ng/api/v1";
-      
-      if (!key) {
-        throw new Error("Payscribe API key not configured");
-      }
+      // Create a collection account for this customer via BPay. No screen
+      // ever calls a provider directly or holds a provider credential —
+      // see services/edgeFunctions.ts.
+      let accountDetails: { account_number: string; bank_name: string; account_name: string } | null = null;
+      let creationFailed: string | null = null;
 
-      const payload: any = {
-        account_type: "static",
-        currency: "NGN",
-        customer_id: currentAccount.payscribe_customer_id,
-        bank: ["9psb"],
-      };
-
-      // Add BVN if available
-      if (currentAccount.identification_number) {
-        payload.identity_type = "bvn";
-        payload.identity_number = currentAccount.identification_number;
-      }
-
-      console.log('📤 Creating virtual account with payload:', {
-        ...payload,
-        identity_number: payload.identity_number ? payload.identity_number.slice(-4) : "not provided"
-      });
-
-      const res = await fetch(`${baseUrl}/collections/virtual-accounts/create`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const responseText = await res.text();
-      console.log('📥 VA creation response status:', res.status);
-      console.log('📥 VA creation response:', responseText);
-
-      let result;
       try {
-        result = JSON.parse(responseText);
-      } catch (parseError) {
-        throw new Error("Invalid JSON response from server");
+        const account = await bpay.createVirtualAccount({
+          customer_id: currentAccount.bpay_customer_id,
+          ...(currentAccount.identification_number
+            ? { bvn: currentAccount.identification_number }
+            : {}),
+        });
+        accountDetails = {
+          account_number: account.account_number,
+          bank_name: account.bank_name,
+          account_name: account.account_name,
+        };
+      } catch (creationError) {
+        creationFailed =
+          creationError instanceof BPayError
+            ? creationError.message
+            : "Failed to create virtual account";
       }
 
-      // Check if response is successful
-      if (result?.status === true && result.status_code === 200) {
-        // SUCCESS! The virtual account was created
-        
-        // Extract account details - note: account is an ARRAY in the response
-        const accountArray = result.message?.details?.account;
-        
-        if (!accountArray || !Array.isArray(accountArray) || accountArray.length === 0) {
-          console.warn('⚠️ Account array is empty or invalid:', accountArray);
-          throw new Error("Virtual account created but details are missing");
-        }
-        
-        const accountDetails = accountArray[0]; // Get the first account
-        
+      if (accountDetails) {
         console.log('✅ Virtual account created successfully:', accountDetails);
         
         // Update database
         const { error } = await supabase
           .from("profiles")
           .update({
-            payscribe_account_number: accountDetails.account_number,
-            payscribe_bank_name: accountDetails.bank_name,
-            payscribe_account_name: accountDetails.account_name,
+            bpay_account_number: accountDetails.account_number,
+            bpay_bank_name: accountDetails.bank_name,
+            bpay_account_name: accountDetails.account_name,
             updated_at: new Date().toISOString(),
           })
           .eq("id", currentAccount.id);
@@ -188,12 +155,12 @@ export default function Fund() {
         console.log('🔄 Force refreshing auth store...');
         const refreshedData = await forceRefreshProfile();
         
-        if (refreshedData?.payscribe_account_number) {
-          const fullAccountNumber = refreshedData.payscribe_account_number;
+        if (refreshedData?.bpay_account_number) {
+          const fullAccountNumber = refreshedData.bpay_account_number;
           setNgnAccount({
-            bankName: refreshedData.payscribe_bank_name || accountDetails.bank_name || "9PSB",
+            bankName: refreshedData.bpay_bank_name || accountDetails.bank_name || "9PSB",
             accountNumber: fullAccountNumber, // Show full number, not masked
-            accountName: refreshedData.payscribe_account_name || accountDetails.account_name || `${refreshedData.first_name} ${refreshedData.last_name}`,
+            accountName: refreshedData.bpay_account_name || accountDetails.account_name || `${refreshedData.first_name} ${refreshedData.last_name}`,
             fullAccountNumber: fullAccountNumber
           });
           
@@ -202,7 +169,7 @@ export default function Fund() {
           
           Alert.alert(
             "Success! 🎉", 
-            `Your virtual account has been created!\n\n🏦 Bank: ${refreshedData.payscribe_bank_name || accountDetails.bank_name}\n🔢 Account: ${fullAccountNumber}\n👤 Account Name: ${refreshedData.payscribe_account_name || accountDetails.account_name}\n\nYou can now receive payments to this account.`
+            `Your virtual account has been created!\n\n🏦 Bank: ${refreshedData.bpay_bank_name || accountDetails.bank_name}\n🔢 Account: ${fullAccountNumber}\n👤 Account Name: ${refreshedData.bpay_account_name || accountDetails.account_name}\n\nYou can now receive payments to this account.`
           );
         } else {
           // Fallback to response data if auth store refresh failed
@@ -224,7 +191,7 @@ export default function Fund() {
         }
       } else {
         // Handle failure or unexpected response
-        const errorMsg = result?.description || result?.message || "Failed to create virtual account";
+        const errorMsg = creationFailed || "Failed to create virtual account";
         console.error('❌ VA creation failed:', errorMsg);
         
         // Handle specific error cases
@@ -232,26 +199,26 @@ export default function Fund() {
           // Check if we already have the account in database
           const { data: profile } = await supabase
             .from("profiles")
-            .select("payscribe_account_number, payscribe_bank_name, payscribe_account_name, first_name, last_name")
+            .select("bpay_account_number, bpay_bank_name, bpay_account_name, first_name, last_name")
             .eq("id", currentAccount.id)
             .single();
           
-          if (profile?.payscribe_account_number) {
+          if (profile?.bpay_account_number) {
             // Also refresh auth store to ensure consistency
             await forceRefreshProfile();
             
-            const fullAccountNumber = profile.payscribe_account_number;
+            const fullAccountNumber = profile.bpay_account_number;
             setNgnAccount({
-              bankName: profile.payscribe_bank_name || "9PSB",
+              bankName: profile.bpay_bank_name || "9PSB",
               accountNumber: fullAccountNumber, // Show full number, not masked
-              accountName: profile.payscribe_account_name || `${profile.first_name} ${profile.last_name}`,
+              accountName: profile.bpay_account_name || `${profile.first_name} ${profile.last_name}`,
               fullAccountNumber: fullAccountNumber
             });
             setHasExistingAccount(true);
             setShowAccountDetails(true);
             Alert.alert(
               "Account Already Exists ✅", 
-              `Your virtual account is already active!\n\n🏦 Bank: ${profile.payscribe_bank_name || "9PSB"}\n🔢 Account: ${fullAccountNumber}\n👤 Account Name: ${profile.payscribe_account_name || `${profile.first_name} ${profile.last_name}`}`
+              `Your virtual account is already active!\n\n🏦 Bank: ${profile.bpay_bank_name || "9PSB"}\n🔢 Account: ${fullAccountNumber}\n👤 Account Name: ${profile.bpay_account_name || `${profile.first_name} ${profile.last_name}`}`
             );
             return;
           }
@@ -296,13 +263,13 @@ export default function Fund() {
     // Force refresh auth store to get updated tier and customer ID
     const refreshedData = await forceRefreshProfile();
     
-    if (refreshedData?.payscribe_account_number) {
+    if (refreshedData?.bpay_account_number) {
       // Virtual account already created during upgrade
-      const fullAccountNumber = refreshedData.payscribe_account_number;
+      const fullAccountNumber = refreshedData.bpay_account_number;
       setNgnAccount({
-        bankName: refreshedData.payscribe_bank_name || "9PSB",
+        bankName: refreshedData.bpay_bank_name || "9PSB",
         accountNumber: fullAccountNumber, // Show full number, not masked
-        accountName: refreshedData.payscribe_account_name || `${refreshedData.first_name} ${refreshedData.last_name}`,
+        accountName: refreshedData.bpay_account_name || `${refreshedData.first_name} ${refreshedData.last_name}`,
         fullAccountNumber: fullAccountNumber
       });
       setHasExistingAccount(true);
@@ -312,7 +279,7 @@ export default function Fund() {
         "Success! 🎉", 
         "You have been upgraded to Tier 1 and your virtual account has been created!\n\nYou can now receive payments to your virtual account."
       );
-    } else if (refreshedData?.payscribe_customer_id && refreshedData?.tier >= 1) {
+    } else if (refreshedData?.bpay_customer_id && refreshedData?.tier >= 1) {
       // Customer ID exists and user is Tier 1, offer to create VA
       Alert.alert(
         "Tier 1 Upgrade Complete! ✅", 
@@ -350,19 +317,19 @@ export default function Fund() {
       console.log('🔍 Check existing VA result:', hasAccount);
       
       // Check current auth state for VA data
-      if (currentAccount?.payscribe_account_number && !hasExistingAccount) {
+      if (currentAccount?.bpay_account_number && !hasExistingAccount) {
         console.log('🔍 Current auth store VA data:', {
-          hasPayscribeAccount: !!currentAccount.payscribe_account_number,
-          payscribe_account_number: currentAccount.payscribe_account_number,
+          hasPayscribeAccount: !!currentAccount.bpay_account_number,
+          bpay_account_number: currentAccount.bpay_account_number,
           tier: currentAccount.tier
         });
         
         console.log('🔄 Syncing VA data from auth store to local state');
-        const fullAccountNumber = currentAccount.payscribe_account_number;
+        const fullAccountNumber = currentAccount.bpay_account_number;
         setNgnAccount({
-          bankName: currentAccount.payscribe_bank_name || "9PSB",
+          bankName: currentAccount.bpay_bank_name || "9PSB",
           accountNumber: fullAccountNumber, // Show full number, not masked
-          accountName: currentAccount.payscribe_account_name || `${currentAccount.first_name} ${currentAccount.last_name}`,
+          accountName: currentAccount.bpay_account_name || `${currentAccount.first_name} ${currentAccount.last_name}`,
           fullAccountNumber: fullAccountNumber
         });
         setHasExistingAccount(true);
@@ -498,7 +465,7 @@ export default function Fund() {
         visible={showUpgradeModal}
         onClose={() => setShowUpgradeModal(false)}
         onUpgradeSuccess={handleUpgradeSuccess}
-        customerId={currentAccount?.payscribe_customer_id || ''}
+        customerId={currentAccount?.bpay_customer_id || ''}
       />
     </SafeAreaView>
   );

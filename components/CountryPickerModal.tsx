@@ -87,7 +87,7 @@ const CountryPickerModal: React.FC<CountryPickerModalProps> = ({
       const filtered = countries.filter(country =>
         (country.title?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
         (country.iso?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-        (country.payscribe_iso?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+        (country.bpay_iso?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
         (country.prefix?.includes(searchTerm))
       );
       setFilteredCountries(filtered);
@@ -261,7 +261,7 @@ const CountryPickerModal: React.FC<CountryPickerModalProps> = ({
               <View style={styles.listContainer}>
                 <FlatList
                   data={filteredCountries}
-                  keyExtractor={(item) => `${item.iso}-${item.payscribe_iso}`}
+                  keyExtractor={(item) => `${item.iso}-${item.bpay_iso}`}
                   renderItem={renderCountryItem}
                   initialNumToRender={20}
                   maxToRenderPerBatch={30}

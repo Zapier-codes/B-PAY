@@ -199,7 +199,7 @@ const InternationalDataScreen = () => {
     setProvidersList([]); // Clear previous providers
     
     try {
-      const providers = await internationalStore.fetchProvidersByCountry(country.payscribe_iso, 'data');
+      const providers = await internationalStore.fetchProvidersByCountry(country.bpay_iso, 'data');
       
       // Manual filtering for data providers
       const dataProviders = providers.filter(provider => {
@@ -256,7 +256,7 @@ const InternationalDataScreen = () => {
     setLoadingProducts(true);
     
     try {
-      const products = await internationalStore.fetchProductsByProvider(country.payscribe_iso, provider.code);
+      const products = await internationalStore.fetchProductsByProvider(country.bpay_iso, provider.code);
       
       if (products.length > 0) {
         setDataProducts(products);
@@ -636,7 +636,7 @@ const InternationalDataScreen = () => {
       
       // Prepare transaction data
       const transactionData = {
-        iso: selectedCountry.payscribe_iso.toUpperCase(),
+        iso: selectedCountry.bpay_iso.toUpperCase(),
         provider_code: selectedProvider.code,
         sku: selectedProduct.sku || selectedProduct.id,
         amount: amount.toString(),
@@ -680,7 +680,7 @@ const InternationalDataScreen = () => {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          iso: selectedCountry.payscribe_iso.toUpperCase(),
+          iso: selectedCountry.bpay_iso.toUpperCase(),
           provider_code: selectedProvider.code,
           sku: selectedProduct.sku || selectedProduct.id,
           amount: amount.toString(),

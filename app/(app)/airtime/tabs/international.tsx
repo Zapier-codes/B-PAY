@@ -137,7 +137,7 @@ const InternationalAirtimeScreen = () => {
       
       // Auto-select Ghana for testing
       if (__DEV__) {
-        const ghana = countries.find(c => c.payscribe_iso?.toUpperCase() === 'GH');
+        const ghana = countries.find(c => c.bpay_iso?.toUpperCase() === 'GH');
         if (ghana) {
           console.log('🇬🇭 Auto-selecting Ghana for testing');
           setTimeout(() => handleCountrySelect(ghana), 1000);
@@ -181,7 +181,7 @@ const InternationalAirtimeScreen = () => {
     
     try {
       // Get the Payscribe ISO for this country - USE UPPERCASE
-      const payscribeIso = (country.payscribe_iso || country.iso || '').toUpperCase();
+      const payscribeIso = (country.bpay_iso || country.iso || '').toUpperCase();
       
       console.log(`🔍 Payscribe ISO for ${getCountryName(country)}: ${payscribeIso}`);
       
@@ -297,7 +297,7 @@ const InternationalAirtimeScreen = () => {
   // Handle country selection
   // -------------------------------------------------------------------------
   const handleCountrySelect = (country) => {
-    console.log(`📍 Country selected: ${getCountryName(country)} (${country.payscribe_iso})`);
+    console.log(`📍 Country selected: ${getCountryName(country)} (${country.bpay_iso})`);
     
     setSelectedCountry(country);
     setShowCountriesList(false);
@@ -321,7 +321,7 @@ const InternationalAirtimeScreen = () => {
     
     if (selectedCountry && provider) {
       // Get Payscribe ISO for the selected country
-      const payscribeIso = (selectedCountry.payscribe_iso || selectedCountry.iso || '').toUpperCase();
+      const payscribeIso = (selectedCountry.bpay_iso || selectedCountry.iso || '').toUpperCase();
       loadAirtimeLimits(payscribeIso, provider.code);
     }
   };
@@ -569,7 +569,7 @@ const InternationalAirtimeScreen = () => {
     
     try {
       // Prepare transaction data - use Payscribe ISO (uppercase)
-      const payscribeIso = (selectedCountry.payscribe_iso || selectedCountry.iso || '').toUpperCase();
+      const payscribeIso = (selectedCountry.bpay_iso || selectedCountry.iso || '').toUpperCase();
       
       const transactionData = {
         iso: payscribeIso,

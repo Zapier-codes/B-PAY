@@ -1,37 +1,16 @@
 // hooks/useVirtualAccount.ts
+//
+// Rebuilt as part of the full BPay-only migration: this hook used to call
+// Payscribe's `/collections/virtual-accounts/create` directly from the
+// client, with a hardcoded test secret key bundled into the compiled app.
+// It now only calls `bpay.createVirtualAccount(...)` — see
+// `services/edgeFunctions.ts` for why no screen/hook is allowed to hold a
+// provider URL or credential, ever.
 import { useState, useCallback } from "react";
 import { Alert } from "react-native";
 import { supabase } from "@/config/supabase";
 import { useAuth } from "@/stores/auth-store";
-
-const API_BASE_URL = "https://sandbox.payscribe.ng/api/v1";
-const API_KEY = "ps_pk_test_5fJUELCWRxbYyqE0mylVlfeekNK9iY0990";
-
-export interface VirtualAccountResponse {
-  status: boolean;
-  description: string;
-  message: {
-    details: {
-      customer: {
-        id: string;
-        name: string;
-      };
-      account: {
-        id: string;
-        account_number: string;
-        account_name: string;
-        bank_name: string;
-        bank_code: string;
-        currency: string;
-        account_type: string;
-      };
-      status: string;
-      created_at: string;
-      updated_at: string;
-    };
-  };
-  status_code: number;
-}
+import { bpay, BPayError } from "@/services/edgeFunctions";
 
 interface VirtualAccount {
   bankName: string;
@@ -53,16 +32,16 @@ export default function useVirtualAccount() {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("payscribe_account_number, bank_name, first_name, last_name")
+        .select("bpay_account_number, bank_name, first_name, last_name")
         .eq("id", currentAccount.user_id)
         .single();
 
       if (error) throw error;
 
-      if (data?.payscribe_account_number) {
-        const fullAccountNumber = data.payscribe_account_number;
+      if (data?.bpay_account_number) {
+        const fullAccountNumber = data.bpay_account_number;
         setNgnAccount({
-          bankName: data.bank_name || "9PSB", // Use bank_name column, not payscribe_bank_name
+          bankName: data.bank_name || "9PSB",
           accountNumber: fullAccountNumber, // NO MASKING - show full number
           accountName: `${data.first_name || ''} ${data.last_name || ''}`.trim(),
           fullAccountNumber: fullAccountNumber
@@ -70,7 +49,7 @@ export default function useVirtualAccount() {
         setHasExistingAccount(true);
         return true;
       }
-      
+
       setHasExistingAccount(false);
       return false;
     } catch (error) {
@@ -80,59 +59,21 @@ export default function useVirtualAccount() {
     }
   }, [currentAccount?.user_id]);
 
-  // Create virtual account via Payscribe
-  const createVirtualAccount = useCallback(async (customerId: string): Promise<VirtualAccountResponse | null> => {
+  // Create a collection account for this customer via BPay (no provider named or called here)
+  const createVirtualAccount = useCallback(async (customerId: string) => {
     try {
       if (!customerId || customerId.trim() === '') {
         throw new Error('Invalid customer ID');
       }
 
-      const payload = {
-        account_type: "static",
-        currency: "NGN",
-        customer_id: customerId.trim(),
-        bank: ["9psb"]
-      };
-
-      const response = await fetch(`${API_BASE_URL}/collections/virtual-accounts/create`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = `HTTP error! status: ${response.status}`;
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMessage = errorData.description || errorData.message || errorText;
-        } catch {
-          errorMessage = errorText;
-        }
-        throw new Error(errorMessage);
-      }
-
-      return await response.json();
+      return await bpay.createVirtualAccount({ customer_id: customerId.trim() });
     } catch (error) {
       console.error("Error creating virtual account:", error);
-      let errorMessage = "Failed to create virtual account. Please check your connection and try again.";
-      
-      if (error instanceof Error) {
-        if (error.message.includes('400')) {
-          errorMessage = "Invalid request. Please check if the customer ID is correct.";
-        } else if (error.message.includes('401')) {
-          errorMessage = "Authentication failed. Please check your API key.";
-        } else if (error.message.includes('404')) {
-          errorMessage = "Customer not found. Please create the customer first.";
-        } else {
-          errorMessage = error.message;
-        }
-      }
-      
-      Alert.alert("API Error", errorMessage);
+      const message =
+        error instanceof BPayError
+          ? error.message
+          : "Failed to create your collection account. Please check your connection and try again.";
+      Alert.alert("BPay Error", message);
       return null;
     }
   }, []);
@@ -141,12 +82,12 @@ export default function useVirtualAccount() {
   const updateDatabaseWithVirtualAccount = useCallback(async (userId: string, accountNumber: string, bankName?: string, accountName?: string) => {
     try {
       const updateData: any = {
-        payscribe_account_number: accountNumber,
+        bpay_account_number: accountNumber,
         updated_at: new Date().toISOString(),
       };
 
       if (bankName) {
-        updateData.bank_name = bankName; // Use bank_name column
+        updateData.bank_name = bankName;
       }
 
       // Note: account_name is not stored separately in your schema
@@ -170,7 +111,7 @@ export default function useVirtualAccount() {
     if (!accountNumber || accountNumber.length < 10) {
       return "Account number unavailable";
     }
-    
+
     const firstSix = accountNumber.slice(0, 6);
     const lastFour = accountNumber.slice(-4);
     return `${firstSix}****${lastFour}`;

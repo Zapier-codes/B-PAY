@@ -387,9 +387,114 @@ standing rules for every task below, not just a suggestion:
 
 ---
 
-## Task 1 — Reconcile the duplicate payment-provider integration (this app's own Edge Functions vs. B-Pay-backend) [ ]
+## Task 1 — Reconcile the duplicate payment-provider integration (this app's own Edge Functions vs. B-Pay-backend) [~] (1a/1b done previously; 1c substantially built this session — see handoff note below, NOT fully finished, do not mark [x] yet)
 
-**Trigger:** found this session, not requested — while reading this repo's
+**SESSION HANDOFF — read this before doing anything else in this file.**
+The product owner gave a direct, explicit instruction this session: finish
+Task 1c across every remaining function and every remaining client-side
+caller in one pass, not one lettered part at a time as the "Build-focus"
+rule below would otherwise require — "do same for all... remove all that
+matters fully let it break... no client side calls, all should be RPC and
+Edge Function calls." That instruction overrides the usual one-part-per-
+session rule for this specific sweep. What follows is exactly how far that
+sweep got before the session ended (on the product owner's own
+instruction to stop and package a patch, mid-file) — **the next session
+picks up from the "NOT YET TOUCHED" list below, not from Task 1c's
+original per-function table**, which is now superseded by this note.
+
+**Built this session (in the patch handed over with this commit):**
+- `services/edgeFunctions.ts` — the centralized Edge-Functions service
+  layer Architecture decision A called for and flagged as "not built yet."
+  Exports one `bpay.*` method per capability (`pay`, `verifyPayment`,
+  `transfer`, `createVirtualAccount`, `getWalletBalance`, `createCustomer`,
+  `upgradeCustomerTier`, `lookupBankAccount`, `vendInternationalBill`,
+  `getTransactions`, `resolveTag`). **Every screen/hook going forward
+  must call one of these, never `supabase.functions.invoke(...)` or
+  `fetch()` directly** — that's the whole point of this file existing.
+- `supabase/functions/_shared/bpayBackend.ts` — shared proxy helper used
+  by every Edge Function below; throws if a caller ever puts a `provider`
+  field in a request body, so the "never send provider" rule (Architecture
+  decision C) is enforced in code, not just by convention.
+- New Edge Functions, all thin BPay-backend proxies, all returning a
+  loud, explicit "not implemented" error rather than falling back to a
+  direct provider call where BPay-backend has no route yet (this is
+  intentional — see each file's own header): `virtual-account`,
+  `wallet-balance`, `customer`, `bank-lookup`, `international-bill`,
+  `transactions`.
+- Renamed + rewritten as proxies: `payscribe-transfer` → `transfer`,
+  `payscribe_balance` → `balance-sync` (also fixes the file-header/folder-
+  name drift Task 1a's own inventory flagged), `resolve_tag` →
+  `resolve-tag` (physical rename only — the file's own content already
+  matched this name).
+- `paystack-webhook` rewritten as a pure signature-verify-and-relay to
+  BPay-backend's `/api/webhooks/paystack` — no more local fee calculation,
+  transaction matching, or wallet crediting logic living in this app. See
+  the file's own header for why it's the one function that still names a
+  provider (Paystack's dashboard has this exact URL configured — a manual
+  re-point, outside any sandbox's reach, is still needed; flagged, not
+  done).
+- DB-facing field names renamed app-wide (client code + Edge Functions):
+  `payscribe_customer_id`→`bpay_customer_id`,
+  `payscribe_account_number`→`bpay_account_number`,
+  `payscribe_account_name`→`bpay_account_name`,
+  `payscribe_bank_name`→`bpay_bank_name`, `payscribe_iso`→`bpay_iso`,
+  `payscribe_ref`→`bpay_customer_ref`. **The actual Postgres columns are
+  NOT renamed yet** — a migration for this is still needed (see NOT YET
+  TOUCHED below) — until it's applied, this app's queries against
+  `profiles`/`countries` will fail against the live schema. That's the
+  "let it break" the product owner asked for, not a bug in this patch.
+- Fully migrated off direct provider calls, onto `bpay.*`:
+  `hooks/useVirtualAccount.ts`, `hooks/useUserProfile.ts`,
+  `components/home/WalletCard/index.tsx`, `app/(app)/fund/index.tsx`,
+  `app/(app)/fund/tabs/TierUpgradeModal.tsx`, `app/(app)/get-tag.tsx`.
+
+**IN PROGRESS, left mid-edit when the session ended —
+`app/(app)/send/tabs/NGNBanks.tsx`:** `verifyAccount()` has already been
+rewritten to call `bpay.lookupBankAccount(...)` instead of fetching
+`api.payscribe.ng/api/v1/payouts/account/lookup` directly. **The `bpay` /
+`BPayError` import was NOT yet added to this file's import block** — the
+very next step, before anything else, is adding
+`import { bpay, BPayError } from "@/services/edgeFunctions";` near this
+file's existing `supabase`/`useAuth` imports (same pattern as every other
+file in the "fully migrated" list above). Confirm no other reference to
+`process.env.EXPO_PUBLIC_PAYSCRIBE_PUBLIC_KEY` remains in this file
+before moving on.
+
+**NOT YET TOUCHED — next session starts here, in this order:**
+1. Finish `app/(app)/send/tabs/NGNBanks.tsx` (just the missing import,
+   per above).
+2. `app/(app)/send/success.tsx` — still defines `executePayscribeTransfer`
+   inline and calls `supabase.functions.invoke(...)` directly from a page
+   component (the exact violation Architecture decision A opens by
+   naming this file specifically). Replace with `bpay.transfer(...)`.
+3. `app/(app)/bundles/tabs/international.tsx` — still has a module-level
+   `API_BASE_URL`/`API_KEY` pair (`ps_pk_live_...`, a **live** secret) and
+   a direct `fetch()` to `international-bills/vend`. Replace with
+   `bpay.vendInternationalBill(...)` (the Edge Function already exists —
+   see `supabase/functions/international-bill/index.ts`).
+4. `app/(app)/airtime/tabs/international.tsx` — no direct provider call
+   found this session, but still has local variables named
+   `payscribeIso` (the `bpay_iso` field rename already landed; only the
+   local variable names are stale — cosmetic but in scope for "remove all
+   that matters").
+5. `stores/international-store.ts` — same `API_BASE_URL`/live `API_KEY`
+   pattern as (3) above, at three separate call sites (see this file's
+   own `fetch(` calls). This is the biggest remaining file; budget it as
+   its own session if the one-part-at-a-time rule is back in force by
+   then.
+6. **DB migration** — write and add to `supabase/migrations/` an
+   `ALTER TABLE ... RENAME COLUMN` migration for every `payscribe_*` →
+   `bpay_*` rename listed above (on `profiles` and `countries`). Code
+   already expects the new names; the schema doesn't yet.
+7. A fresh, short `docs/BPAY-ARCHITECTURE.md` — a quick-reference version
+   of Architecture decision C for any session/contractor that doesn't
+   want to read this whole handover file, plus a pointer back here for
+   the full history. Not written yet.
+8. Confirm with the product owner whether Paystack's dashboard webhook
+   URL has been re-pointed at BPay-backend directly yet — if so,
+   `paystack-webhook` can be deleted outright instead of kept as a relay.
+
+**1a — full inventory, done this session.** Every provider call in this
 `supabase/functions/`, discovered `payscribe-transfer`/`payscribe_balance`/
 `paystack-webhook` call Payscribe/Paystack directly, independently of
 B-Pay-backend's own `providers/payscribe.js`/`paystack.js`. Two live

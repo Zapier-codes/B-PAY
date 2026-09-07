@@ -12,6 +12,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "@/config/supabase";
 import { useAuth } from "@/stores/auth-store";
+import { bpay } from "@/services/edgeFunctions";
 
 interface WalletProfile {
   id: string;
@@ -75,44 +76,32 @@ export default function WalletCard() {
     }
   }, [isAuthenticated, currentAccount?.id, currentAccount?.bpay_tag]);
 
-  // Live Payscribe sync (demo mode) - silent, safe, no UI impact
-  const syncBalanceFromPayscribe = async (userId: string) => {
-    const publicKey = process.env.EXPO_PUBLIC_PAYSCRIBE_PUBLIC_KEY;
-    const baseUrl = process.env.EXPO_PUBLIC_PAYSCRIBE_BASE_URL || "https://sandbox.payscribe.ng/api/v1";
-
-    if (!publicKey) return;
-
+  // Silent, best-effort balance refresh via BPay — never calls a provider
+  // directly, never holds a provider credential client-side. See
+  // services/edgeFunctions.ts for why this is the only allowed shape.
+  const syncBalanceFromBpay = async (userId: string) => {
     try {
-      const res = await fetch(`${baseUrl}/wallet/balance`, {
-        headers: {
-          Authorization: `Bearer ${publicKey}`,
-          "Content-Type": "application/json",
-        },
-      });
+      const { balance: newBalance } = await bpay.getWalletBalance();
+      if (newBalance === undefined) return;
 
-      const data = await res.json();
+      // Update in Supabase
+      await supabase
+        .from("profiles")
+        .update({ balance: newBalance })
+        .eq("id", userId);
 
-      if (data.status && data.message?.details?.balance !== undefined) {
-        const newBalance = data.message.details.balance;
-        
-        // Update in Supabase
-        await supabase
-          .from("profiles")
-          .update({ balance: newBalance })
-          .eq("id", userId);
-        
-        // Update in local state
-        setProfile(prev => prev ? { ...prev, balance: newBalance } : null);
-        
-        // Update in auth store
-        if (currentAccount) {
-          await updateProfile({ balance: newBalance });
-        }
-        
-        console.log("💰 Balance synced:", newBalance);
+      // Update in local state
+      setProfile(prev => prev ? { ...prev, balance: newBalance } : null);
+
+      // Update in auth store
+      if (currentAccount) {
+        await updateProfile({ balance: newBalance });
       }
+
+      console.log("💰 Balance synced:", newBalance);
     } catch (err) {
-      // Silent fail — normal in demo
+      // Silent fail — this stays best-effort until BPay backend exposes a
+      // balance route (see supabase/functions/wallet-balance/index.ts).
     }
   };
 
@@ -179,7 +168,7 @@ export default function WalletCard() {
 
       // Sync live balance silently
       console.log("🔄 Syncing balance for user:", fetchedProfile.id);
-      await syncBalanceFromPayscribe(fetchedProfile.id);
+      await syncBalanceFromBpay(fetchedProfile.id);
 
       // Set profile data
       setProfile(fetchedProfile);

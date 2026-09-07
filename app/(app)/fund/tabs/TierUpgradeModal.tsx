@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { supabase } from "@/config/supabase";
+import { bpay, BPayError } from "@/services/edgeFunctions";
 import { useAuth } from "@/stores/auth-store";
 import * as Haptics from "expo-haptics";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -133,7 +134,7 @@ export default function TierUpgradeModal({
       const { data } = await supabase
         .from("profiles")
         .select(
-          "country, date_of_birth, address_street, address_city, address_state, address_postal_code, identification_number, tier, payscribe_account_number, payscribe_customer_id, first_name, last_name, email, phone"
+          "country, date_of_birth, address_street, address_city, address_state, address_postal_code, identification_number, tier, bpay_account_number, bpay_customer_id, first_name, last_name, email, phone"
         )
         .eq("id", currentAccount.user_id)
         .single();
@@ -157,7 +158,7 @@ export default function TierUpgradeModal({
         }
         
         // If user already has tier 1, skip to success
-        if (data.tier === 1 || data.payscribe_account_number) {
+        if (data.tier === 1 || data.bpay_account_number) {
           setCreatedVaAccount(true);
         }
       }
@@ -182,9 +183,9 @@ export default function TierUpgradeModal({
         updated_at: new Date().toISOString(),
       };
 
-      // If we have a customerId from Payscribe, save it
+      // If we have a customer id from BPay, save it
       if (customerId) {
-        updateData.payscribe_customer_id = customerId;
+        updateData.bpay_customer_id = customerId;
       }
 
       const { error: profileError } = await supabase
@@ -207,13 +208,6 @@ export default function TierUpgradeModal({
 
   const createVirtualAccount = async (customerId: string): Promise<boolean> => {
     try {
-      const key = process.env.EXPO_PUBLIC_PAYSCRIBE_PUBLIC_KEY;
-      const baseUrl = process.env.EXPO_PUBLIC_PAYSCRIBE_BASE_URL || "https://sandbox.payscribe.ng/api/v1";
-
-      if (!key) {
-        throw new Error("Payscribe API key not configured");
-      }
-
       // Get fresh profile data to ensure we have the latest identification_number
       const { data: freshProfile } = await supabase
         .from("profiles")
@@ -221,75 +215,43 @@ export default function TierUpgradeModal({
         .eq("id", currentAccount?.user_id)
         .single();
 
-      console.log("🔍 Creating permanent VA for customer:", customerId);
-      console.log("📋 Customer BVN:", freshProfile?.identification_number?.slice(0, 3) + "*******");
+      console.log("🔍 Creating permanent account for customer:", customerId);
 
-      // CORRECT PAYLOAD according to Payscribe documentation
-      const payload: any = {
-        account_type: "static",  // Required: "static" for permanent account
-        currency: "NGN",         // Required: Currency
-        customer_id: customerId,  // Required: customer_id
-        bank: ["9psb"],  // Required: Array of banks. 9psb = 9PSB Microfinance Bank
-      };
+      // Create a collection account for this customer via BPay. No screen
+      // ever calls a provider directly or holds a provider credential —
+      // see services/edgeFunctions.ts.
+      let account: { account_number: string; bank_name: string; account_name: string } | null = null;
+      let creationError: string | null = null;
 
-      // Add BVN for verification if available
-      if (freshProfile?.identification_number) {
-        payload.identity_type = "bvn";
-        payload.identity_number = freshProfile.identification_number;
-      }
-
-      console.log("📤 Sending VA creation request:", {
-        ...payload,
-        identity_number: payload.identity_number ? "***" + payload.identity_number.slice(-4) : "not provided"
-      });
-
-      const res = await fetch(`${baseUrl}/collections/virtual-accounts/create`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const responseText = await res.text();
-      console.log("📥 Payscribe VA Response Status:", res.status);
-      console.log("📥 Payscribe VA Response:", responseText);
-
-      let result;
       try {
-        result = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error("❌ JSON Parse Error:", responseText);
-        throw new Error("Invalid response from server");
+        account = await bpay.createVirtualAccount({
+          customer_id: customerId,
+          ...(freshProfile?.identification_number
+            ? { bvn: freshProfile.identification_number }
+            : {}),
+        });
+      } catch (err) {
+        creationError = err instanceof BPayError ? err.message : "Failed to create virtual account";
       }
 
-      if (res.status === 400 && result.description?.includes("Customer not found")) {
-        throw new Error("Customer not found for this business. Please create customer first");
-      }
+      if (account?.account_number) {
+        const accountNumber = account.account_number;
+        const bankName = account.bank_name || "9PSB";
+        const accountName = account.account_name || `${freshProfile?.first_name} ${freshProfile?.last_name}`;
 
-      if (res.status === 400 && result.description?.includes("Customer not eligible")) {
-        throw new Error("Customer is not eligible for virtual account. Ensure Tier 1 upgrade is complete.");
-      }
-
-      if (result?.status === true && result.message?.details?.account?.account_number) {
-        const accountNumber = result.message.details.account.account_number;
-        const bankName = result.message.details.account.bank_name || "9PSB";
-        const accountName = result.message.details.account.account_name || `${freshProfile?.first_name} ${freshProfile?.last_name}`;
-        
         console.log("✅ Virtual account created successfully:", {
           accountNumber,
           bankName,
           accountName
         });
-        
+
         // Update profile with account number
         const { error } = await supabase
           .from("profiles")
           .update({
-            payscribe_account_number: accountNumber,
-            payscribe_bank_name: bankName,
-            payscribe_account_name: accountName,
+            bpay_account_number: accountNumber,
+            bpay_bank_name: bankName,
+            bpay_account_name: accountName,
             updated_at: new Date().toISOString(),
           })
           .eq("id", currentAccount?.user_id);
@@ -303,21 +265,21 @@ export default function TierUpgradeModal({
           return true;
         }
       } else {
-        const errorMsg = result?.description || result?.message || "Failed to create virtual account";
+        const errorMsg = creationError || "Failed to create virtual account";
         console.error("❌ Virtual account creation error:", errorMsg);
-        
+
         // Handle specific error cases
         if (errorMsg.includes("not found")) {
-          throw new Error("Customer not found on Payscribe. Please verify your customer account.");
+          throw new Error("Customer not found. Please verify your customer account.");
         } else if (errorMsg.includes("already exists")) {
           // Check if account already exists in our database
           const { data: existingAccount } = await supabase
             .from("profiles")
-            .select("payscribe_account_number")
+            .select("bpay_account_number")
             .eq("id", currentAccount?.user_id)
             .single();
-          
-          if (existingAccount?.payscribe_account_number) {
+
+          if (existingAccount?.bpay_account_number) {
             setCreatedVaAccount(true);
             return true; // Account already exists, treat as success
           }
@@ -391,55 +353,27 @@ export default function TierUpgradeModal({
       // Get fresh profile data
       const { data: profile } = await supabase
         .from("profiles")
-        .select("payscribe_customer_id, email, first_name, last_name, phone")
+        .select("bpay_customer_id, email, first_name, last_name, phone")
         .eq("id", currentAccount?.user_id)
         .single();
 
-      let customerId = customerId || profile?.payscribe_customer_id;
+      let customerId = customerId || profile?.bpay_customer_id;
 
-      // Step 1: Upgrade to Tier 1 with Payscribe
-      console.log("🚀 Starting Tier 1 upgrade...");
-      const tier1Payload = {
+      // Step 1: Upgrade this customer's KYC tier via BPay. No screen ever
+      // calls a provider directly or holds a provider credential — see
+      // services/edgeFunctions.ts.
+      console.log("🚀 Starting tier upgrade...");
+
+      if (!customerId) {
+        throw new Error("Missing customer id — cannot upgrade tier");
+      }
+
+      await bpay.upgradeCustomerTier({
         customer_id: customerId,
-        dob: dob.toISOString().split("T")[0],
-        address: { ...address },
-        identification_type: "BVN",
-        identification_number: identificationNumber,
-      };
-
-      console.log("📤 Tier 1 payload:", {
-        ...tier1Payload,
-        identification_number: "***" + identificationNumber.slice(-4)
+        bvn: identificationNumber,
       });
 
-      const tier1Res = await fetch("https://sandbox.payscribe.ng/api/v1/customers/create/tier1", {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${process.env.EXPO_PUBLIC_PAYSCRIBE_PUBLIC_KEY || "ps_pk_test_5fJUELCWRxbYyqE0mylVlfeekNK9iY0990"}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(tier1Payload),
-      });
-
-      const tier1ResponseText = await tier1Res.text();
-      console.log("📥 Tier 1 response:", tier1ResponseText);
-
-      if (!tier1Res.ok) {
-        throw new Error(`Tier 1 upgrade failed: ${tier1Res.status}`);
-      }
-
-      let tier1Data;
-      try {
-        tier1Data = JSON.parse(tier1ResponseText);
-      } catch (e) {
-        throw new Error("Invalid response from Payscribe");
-      }
-
-      if (!tier1Data.status) {
-        throw new Error(tier1Data.description || "Tier 1 upgrade failed");
-      }
-
-      console.log("✅ Tier 1 upgrade successful");
+      console.log("✅ Tier upgrade successful");
 
       // Step 2: Save details to Supabase
       const saved = await saveCustomerDetailsToSupabase(customerId);
@@ -475,7 +409,7 @@ export default function TierUpgradeModal({
       let errorMessage = err.message || "Please try again. Make sure all information is correct.";
       
       if (err.message.includes("Customer not found")) {
-        errorMessage = "Customer not found on Payscribe. Please contact support.";
+        errorMessage = "Customer not found. Please contact support.";
       } else if (err.message.includes("not eligible")) {
         errorMessage = "Your account needs to be Tier 1 verified first. Please complete the verification.";
       } else if (err.message.includes("already exists")) {

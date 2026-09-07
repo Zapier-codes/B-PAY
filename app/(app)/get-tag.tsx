@@ -17,6 +17,7 @@ import {
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "@/config/supabase";
+import { bpay, BPayError } from "@/services/edgeFunctions";
 import { useAuth } from "@/stores/auth-store";
 import * as Haptics from "expo-haptics";
 
@@ -346,15 +347,7 @@ export default function GetTagScreen() {
     });
   };
 
-  const createPayscribeCustomer = async () => {
-    const key = process.env.EXPO_PUBLIC_PAYSCRIBE_PUBLIC_KEY;
-    const baseUrl = process.env.EXPO_PUBLIC_PAYSCRIBE_BASE_URL;
-    
-    if (!key) {
-      await sendNotification("Configuration Error", "Payscribe API key not configured", "error");
-      return null;
-    }
-
+  const createBpayCustomer = async () => {
     // Ensure phone is in E.164 format for Nigeria
     let formattedPhone = phone;
     if (formattedPhone.startsWith("0")) {
@@ -369,65 +362,25 @@ export default function GetTagScreen() {
       return null;
     }
 
-    const payload = {
-      first_name: firstName.trim(),
-      last_name: lastName.trim(),
-      email: email.trim(),
-      phone: formattedPhone.trim(),
-      country: country.trim(),
-    };
-
-    console.log("📤 Creating Payscribe customer:", payload);
+    console.log("📤 Creating BPay customer");
 
     try {
-      const res = await fetch(`${baseUrl}/customers/create`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+      // Onboard the customer via BPay. No screen ever calls a provider
+      // directly or holds a provider credential — see
+      // services/edgeFunctions.ts.
+      const { customer_id } = await bpay.createCustomer({
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        email: email.trim(),
+        phone: formattedPhone.trim(),
       });
 
-      const responseText = await res.text();
-      console.log("📥 Payscribe Response:", responseText);
-      console.log("📊 Status:", res.status);
-
-      let result;
-      try {
-        result = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error("❌ JSON Parse Error:", responseText);
-        await sendNotification("Server Error", "Invalid response from Payscribe", "error");
-        return null;
-      }
-
-      // FIXED: Proper success detection
-      if (result?.status === true && result.message?.details?.customer_id) {
-        console.log("✅ Payscribe customer created successfully:", result.message.details.customer_id);
-        console.log("🎯 Customer tier:", result.message.details.tier);
-        // Return both customer_id and tier (tier can be null/undefined)
-        return {
-          customer_id: result.message.details.customer_id,
-          tier: result.message.details.tier // This will be null if not provided
-        };
-      } else if (result?.status === true && result.data?.customer_id) {
-        console.log("✅ Payscribe customer created successfully:", result.data.customer_id);
-        console.log("🎯 Customer tier:", result.data.tier);
-        // Return both customer_id and tier (tier can be null/undefined)
-        return {
-          customer_id: result.data.customer_id,
-          tier: result.data.tier // This will be null if not provided
-        };
-      } else {
-        const errorMsg = result?.description || result?.message || result?.error || "Failed to create customer";
-        console.error("❌ Payscribe error:", errorMsg);
-        await sendNotification("Payscribe Error", errorMsg, "error");
-        return null;
-      }
+      console.log("✅ BPay customer created successfully:", customer_id);
+      return { customer_id, tier: null as number | null };
     } catch (error) {
-      console.error("❌ Network Error:", error);
-      await sendNotification("Network Error", "Failed to connect to Payscribe", "error");
+      const errorMsg = error instanceof BPayError ? error.message : "Failed to create customer";
+      console.error("❌ BPay error:", errorMsg);
+      await sendNotification("Account Setup Error", errorMsg, "error");
       return null;
     }
   };
@@ -439,16 +392,16 @@ const saveCustomerAndTag = async () => {
   setSaving(true);
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
-  console.log("🚀 Creating Payscribe customer and BPAY tag...");
+  console.log("🚀 Creating BPay customer and BPAY tag...");
 
-  // Step 1: Create Payscribe customer
-  const payscribeResult = await createPayscribeCustomer();
-  if (!payscribeResult) {
+  // Step 1: Create BPay customer
+  const bpayResult = await createBpayCustomer();
+  if (!bpayResult) {
     setSaving(false);
     return;
   }
 
-  const { customer_id, tier } = payscribeResult;
+  const { customer_id, tier } = bpayResult;
 
   // Step 2: Save everything to Supabase
   const { data: current } = await supabase
@@ -466,7 +419,7 @@ const saveCustomerAndTag = async () => {
     phone: phone,
     country: country,
     bpay_tag: cleanTag,
-    payscribe_customer_id: customer_id,
+    bpay_customer_id: customer_id,
     tag_created_at: initialTagCreated ? undefined : new Date().toISOString(),
     tag_changed_at: new Date().toISOString(),
     tag_change_count: newCount,

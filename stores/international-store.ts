@@ -5,7 +5,7 @@ import { supabase } from '@/config/supabase';
 
 interface Country {
   iso: string; // Our internal ISO (from iso_code)
-  payscribe_iso: string; // ISO code from Payscribe API
+  bpay_iso: string; // ISO code from Payscribe API
   title: string;
   prefix: string;
   flag_emoji?: string;
@@ -198,12 +198,12 @@ export const useInternationalStore = create<InternationalStore>()(
           // Filter out countries with incomplete data
           const { data: dbCountries, error: dbError } = await supabase
             .from('countries')
-            .select('iso_code, name, dial_code, flag_emoji, currency_symbol, currency_code, title, prefix, iso, payscribe_iso, ppp_reward_amount')
+            .select('iso_code, name, dial_code, flag_emoji, currency_symbol, currency_code, title, prefix, iso, bpay_iso, ppp_reward_amount')
             .eq('is_active', true)
             .not('currency_symbol', 'is', null)
             .not('currency_code', 'is', null)
             .not('iso', 'is', null)
-            .not('payscribe_iso', 'is', null)
+            .not('bpay_iso', 'is', null)
             .order('name', { ascending: true });
           
           if (dbError) throw dbError;
@@ -216,7 +216,7 @@ export const useInternationalStore = create<InternationalStore>()(
               .filter((country: any) => {
                 // Additional filtering for completeness
                 return country.iso_code && 
-                       country.payscribe_iso && 
+                       country.bpay_iso && 
                        country.currency_symbol && 
                        country.currency_code &&
                        country.title;
@@ -226,11 +226,11 @@ export const useInternationalStore = create<InternationalStore>()(
                 const internalIso = country.iso_code?.toLowerCase() || country.iso?.toLowerCase() || '';
                 
                 // Payscribe ISO - use stored value
-                const payscribeIso = country.payscribe_iso?.toLowerCase() || internalIso;
+                const payscribeIso = country.bpay_iso?.toLowerCase() || internalIso;
                 
                 return {
                   iso: internalIso, // Our internal ISO code
-                  payscribe_iso: payscribeIso, // ISO code for Payscribe API
+                  bpay_iso: payscribeIso, // ISO code for Payscribe API
                   title: country.title || country.name || '',
                   prefix: country.prefix || country.dial_code?.replace('+', '') || '',
                   flag_emoji: country.flag_emoji || getFlagEmoji(country.iso_code || country.iso),
@@ -306,7 +306,7 @@ export const useInternationalStore = create<InternationalStore>()(
                 
                 return {
                   iso: internalIso, // Our internal ISO
-                  payscribe_iso: payscribeIso, // Payscribe's ISO
+                  bpay_iso: payscribeIso, // Payscribe's ISO
                   title: countryName,
                   prefix: country.prefix || '',
                   flag_emoji: getFlagEmoji(country.iso),
@@ -318,7 +318,7 @@ export const useInternationalStore = create<InternationalStore>()(
             // Save to Supabase for future use
             try {
               const countriesToInsert = apiCountries.map(country => {
-                const internalIso = country.iso || country.payscribe_iso;
+                const internalIso = country.iso || country.bpay_iso;
                 
                 return {
                   iso_code: internalIso.toUpperCase(),
@@ -328,7 +328,7 @@ export const useInternationalStore = create<InternationalStore>()(
                   title: country.title,
                   prefix: country.prefix,
                   iso: internalIso.toLowerCase(),
-                  payscribe_iso: country.payscribe_iso.toUpperCase(), // Store Payscribe ISO
+                  bpay_iso: country.bpay_iso.toUpperCase(), // Store Payscribe ISO
                   is_active: true,
                   currency_symbol: getCurrencySymbol(internalIso),
                   currency_code: getCurrencyCode(internalIso),
@@ -407,9 +407,9 @@ export const useInternationalStore = create<InternationalStore>()(
           if (!country) {
             country = state.countries.find(c => 
               c.iso === normalizedIso || 
-              c.payscribe_iso === normalizedIso ||
+              c.bpay_iso === normalizedIso ||
               c.iso === countryIso.toUpperCase() ||
-              c.payscribe_iso === countryIso.toUpperCase()
+              c.bpay_iso === countryIso.toUpperCase()
             );
           }
           
@@ -422,9 +422,9 @@ export const useInternationalStore = create<InternationalStore>()(
                       state.getCountryByPayscribeIso(normalizedIso) ||
                       state.countries.find(c => 
                         c.iso === normalizedIso || 
-                        c.payscribe_iso === normalizedIso ||
+                        c.bpay_iso === normalizedIso ||
                         c.iso === countryIso.toUpperCase() ||
-                        c.payscribe_iso === countryIso.toUpperCase()
+                        c.bpay_iso === countryIso.toUpperCase()
                       );
             
             if (!country) {
@@ -433,7 +433,7 @@ export const useInternationalStore = create<InternationalStore>()(
           }
           
           // Use Payscribe ISO for API calls (should be uppercase for API)
-          const payscribeIso = country.payscribe_iso.toUpperCase();
+          const payscribeIso = country.bpay_iso.toUpperCase();
           const internalIso = country.iso.toLowerCase();
           
           console.log(`Fetching ${serviceType} providers for ${country.title} (Payscribe ISO: ${payscribeIso}, Internal ISO: ${internalIso}) from API...`);
@@ -633,7 +633,7 @@ export const useInternationalStore = create<InternationalStore>()(
           }
           
           // Use Payscribe ISO for API calls
-          const payscribeIso = country.payscribe_iso.toUpperCase();
+          const payscribeIso = country.bpay_iso.toUpperCase();
           
           console.log(`Fetching products for ${payscribeIso}/${providerCode}...`);
           
@@ -711,7 +711,7 @@ export const useInternationalStore = create<InternationalStore>()(
       getCountryByPayscribeIso: (payscribeIso: string) => {
         const state = get();
         const normalizedIso = payscribeIso.toLowerCase();
-        return state.countries.find(country => country.payscribe_iso === normalizedIso);
+        return state.countries.find(country => country.bpay_iso === normalizedIso);
       },
       
       // Helper method to get providers for a country (using our internal ISO) with optional service type filtering

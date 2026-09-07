@@ -939,44 +939,27 @@ const RecipientSelectionScreen = () => {
 
   const verifyAccount = async (accountNumber, bankCode) => {
     try {
-      const apiKey = process.env.EXPO_PUBLIC_PAYSCRIBE_PUBLIC_KEY;
-      const response = await fetch('https://api.payscribe.ng/api/v1/payouts/account/lookup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          account: accountNumber,
-          bank: bankCode, // Use actual bank_code from schema
-        }),
+      // Resolve the account name via BPay. No screen ever calls a
+      // provider directly or holds a provider credential — see
+      // services/edgeFunctions.ts.
+      const result = await bpay.lookupBankAccount({
+        account_number: accountNumber,
+        bank_code: bankCode,
       });
 
-      if (!response.ok) {
-        return {
-          success: false,
-          error: 'Account verification failed',
-        };
-      }
-
-      const data = await response.json();
-      
-      if (data?.status === true || data?.success === true) {
-        return {
-          success: true,
-          accountName: data?.data?.account_name || data?.message?.details?.account_name || 'Verified Account',
-        };
-      }
-
       return {
-        success: false,
-        error: 'Account doesn\'t exist for selected bank',
+        success: true,
+        accountName: result.account_name || 'Verified Account',
       };
     } catch (error) {
       console.error('Verification error:', error);
+      const message =
+        error instanceof BPayError
+          ? error.message
+          : 'Network error. Please check your internet connection.';
       return {
         success: false,
-        error: 'Network error. Please check your internet connection.',
+        error: message,
       };
     }
   };

@@ -24,8 +24,8 @@ export interface UserProfile {
   balance: number;
   country: string | null;
   tier: number | null;
-  payscribe_account_number: string | null;
-  payscribe_customer_id: string | null;
+  bpay_account_number: string | null;
+  bpay_customer_id: string | null;
   tag_created_at: string | null;
   tag_changed_at: string | null;
   tag_change_count: number;
@@ -173,8 +173,8 @@ const fetchCompleteUserProfile = async (userId: string): Promise<UserProfile | n
       first_name: data.first_name,
       last_name: data.last_name,
       balance: data.balance,
-      payscribe_account_number: data.payscribe_account_number,
-      payscribe_customer_id: data.payscribe_customer_id
+      bpay_account_number: data.bpay_account_number,
+      bpay_customer_id: data.bpay_customer_id
     });
 
     return {
@@ -195,8 +195,8 @@ const fetchCompleteUserProfile = async (userId: string): Promise<UserProfile | n
       balance: data.balance || 0,
       country: data.country,
       tier: data.tier,
-      payscribe_account_number: data.payscribe_account_number,
-      payscribe_customer_id: data.payscribe_customer_id,
+      bpay_account_number: data.bpay_account_number,
+      bpay_customer_id: data.bpay_customer_id,
       tag_created_at: data.tag_created_at,
       tag_changed_at: data.tag_changed_at,
       tag_change_count: data.tag_change_count || 0,
@@ -571,7 +571,7 @@ export const useAuthStore = create<AuthState>()(
             first_name: account.first_name,
             last_name: account.last_name,
             balance: account.balance,
-            payscribe_account_number: account.payscribe_account_number,
+            bpay_account_number: account.bpay_account_number,
             hasSecurityToken: !!securityTokenHash
           });
           
@@ -610,8 +610,8 @@ export const useAuthStore = create<AuthState>()(
               balance: profile.balance,
               country: profile.country,
               tier: profile.tier,
-              payscribe_account_number: profile.payscribe_account_number,
-              payscribe_customer_id: profile.payscribe_customer_id,
+              bpay_account_number: profile.bpay_account_number,
+              bpay_customer_id: profile.bpay_customer_id,
               tag_created_at: profile.tag_created_at,
               tag_changed_at: profile.tag_changed_at,
               tag_change_count: profile.tag_change_count,
@@ -990,7 +990,7 @@ export const useAuth = () => {
     first_name: store.currentAccount?.first_name || 'null',
     last_name: store.currentAccount?.last_name || 'null',
     balance: store.currentAccount?.balance || 0,
-    payscribe_account_number: store.currentAccount?.payscribe_account_number || 'null',
+    bpay_account_number: store.currentAccount?.bpay_account_number || 'null',
     savedAccounts: store.savedAccounts.length,
     isLoading: store.isLoading,
     isInitialized: store.isInitialized

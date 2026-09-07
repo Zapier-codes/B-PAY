@@ -7,7 +7,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // throw a ReferenceError at runtime, not a hypothetical concern.
 // Matches this repo's own established client-instantiation pattern
 // (see supabase/functions/delete-account/index.ts) — SERVICE_ROLE_KEY,
-// not the anon key, since this reads payscribe_account_number (a
+// not the anon key, since this reads bpay_account_number (a
 // sensitive field the original code's own comment already flagged as
 // "only backend sees this") and needs to bypass RLS reliably
 // regardless of whatever policy is set on `profiles`.
@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, payscribe_account_number, full_name, bpay_tag')
+    .select('id, bpay_account_number, full_name, bpay_tag')
     .eq('bpay_tag', cleanTag)
     .single();
 
@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
 
   return new Response(JSON.stringify({
     success: true,
-    account_number: profile.payscribe_account_number,  // ← real number (only backend sees this)
+    account_number: profile.bpay_account_number,  // ← real number (only backend sees this)
     name: profile.full_name || 'User',
     tag: `@${profile.bpay_tag}`
   }), { headers: { 'Content-Type': 'application/json' } });
